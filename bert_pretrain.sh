@@ -24,11 +24,12 @@ python bert_mlm_nsp.py \
 --nsp_output_file_path nsp_file_ne.txt \
 --log_file log_mlm_nsp.txt \
 --model_path ../extened_bert/ \
---iterations 50 \
---batch_size 2 \
+--iterations 500000 \
+--save_after 100000 \
+--batch_size 16 \
 --learning_rate 0.0001 \
---warmup_steps 10 \
---model_save_path ../saved_models/pretrained_mbert.pt \
+--warmup_steps 10000 \
+--model_save_path ../saved_models/ \
 --device cpu
 
 

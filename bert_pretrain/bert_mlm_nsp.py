@@ -42,9 +42,10 @@ def read_mlm_file(file_path):
             data.append(line)
     return data
 
-def save_model():
+def save_model(it):
     model_dict = model.state_dict()
-    torch.save(model_dict, args.model_save_path)
+    path = args.model_save_path + "pretrained_mbert_" + str(it) +".pt"
+    torch.save(model_dict, path)
 
 def set_new_lr(rate):
     for param_group in optimizer_lm.param_groups:
@@ -135,7 +136,9 @@ def train(iterations, batch_size):
         loss.backward()
         optimizer_lm.step()
         optimizer_mlm_nsp.step()
-    save_model()
+        if (iteration+1) % args.save_after == 0:
+            save_model(iteration)
+    save_model(args.iterations)
 
 def prepare_mlm_file(file_path, output_file_path):
     mlm_file = open(file_path, 'r')
@@ -210,6 +213,7 @@ if __name__ == "__main__" :
     parser.add_argument('--warmup_steps', type = int, default = 10000, help = 'number of warm up steps')
     parser.add_argument('--model_path', type = str, default = "../extened_bert/", help = 'path to the extended bert model')
     parser.add_argument('--log_file', type = str, help = 'path to the log file')
+    parser.add_argument('--save_after', type = int, help = 'save the model after every save_after interations')
     args = parser.parse_args()
 
     number_of_tokens = get_number_of_tokens(args.model_path)
