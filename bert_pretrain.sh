@@ -30,6 +30,6 @@ python bert_mlm_nsp.py \
 --learning_rate 0.0001 \
 --warmup_steps 10000 \
 --model_save_path ../saved_models/ \
---device cpu
+--device cuda
 
 
