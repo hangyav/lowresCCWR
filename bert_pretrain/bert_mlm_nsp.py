@@ -183,16 +183,16 @@ def prepare_nsp_file(file_path, output_file_path):
 
 if __name__ == "__main__" :
 
-    wiki_file = "wiki-ne.txt"
+    wiki_file = "../wiki-ne.txt"
     mlm_output_file_path = 'mlm_file_ne.txt'
     nsp_output_file_path = 'nsp_file_ne.txt'
     log_file = 'log_mlm_nsp.txt' 
-    bert_model = 'extened_bert/'
+    bert_model = '../extened_bert/'
     iterations = 10
     batch_size = 2
     learning_rate = 0.00005
     warmup_steps = 8
-    model_save_path = "saved_models/pretrained_mbert.pt"
+    model_save_path = "../saved_models/pretrained_mbert.pt"
 
     log.basicConfig(format='%(asctime)s %(message)s', 
             datefmt='%m/%d/%Y %I:%M:%S %p', 
