@@ -31,6 +31,7 @@ class mlm_nsp_classifier(nn.Module):
         x_mlm = self.mlm_layer2(x_mlm)
         x_nsp = self.nsp_layer(nsp_features)
         return x_mlm, x_nsp
+        #return x_mlm
 
 def read_mlm_file(file_path):
     mlm_file = open(file_path, 'r')
@@ -62,6 +63,7 @@ def schedule_learning_rate(it):
 def train(iterations, batch_size):
     mlm_current_head = 0
     nsp_head = 0
+    batch_loss = 0
     for iteration in range(iterations):
 
         schedule_learning_rate(iteration)
@@ -90,9 +92,9 @@ def train(iterations, batch_size):
         batch_labels = np.zeros((batch_size,), dtype = int)
 
         for data_index, data in enumerate(data):
-            input_ids = d['input_ids'].tolist()
-            token_type_ids = d['token_type_ids'].tolist()
-            next_sentence_label = d['next_sentence_label'].tolist()
+            input_ids = data['input_ids'].tolist()
+            token_type_ids = data['token_type_ids'].tolist()
+            next_sentence_label = data['next_sentence_label'].tolist()
             batch_input_ids[data_index, 0:len(input_ids)] = input_ids
             batch_attention_mask[data_index, 0:len(input_ids)] = 1
             batch_token_type_ids[data_index, 0:len(input_ids)] = token_type_ids
@@ -105,37 +107,47 @@ def train(iterations, batch_size):
 
         
         mlm_inputs = tokenizer(mlm_batch_data, truncation=True, padding=True)
-        mlm_labels = data_collator.mask_tokens(torch.tensor(mlm_inputs['input_ids']))[0]
+        mlm_input_ids, mlm_labels = data_collator.mask_tokens(torch.tensor(mlm_inputs['input_ids']))
 
-        mlm_input_ids = torch.tensor(mlm_inputs['input_ids']).to(args.device)
+        mlm_input_ids = mlm_input_ids.to(args.device)
         mlm_attention_mask = torch.tensor(mlm_inputs['attention_mask']).to(args.device)
         mlm_token_type_ids = torch.tensor(mlm_inputs['token_type_ids']).to(args.device)
         mlm_labels = mlm_labels.to(args.device)
-
+        
+    
         mlm_features = model(input_ids = mlm_input_ids, 
                 attention_mask = mlm_attention_mask, 
                 token_type_ids = mlm_token_type_ids)[0]
 
         nsp_features = model(input_ids = nsp_input_ids, 
                 attention_mask = nsp_attention_mask, 
-                token_type_ids = nsp_token_type_ids)[0][:, 0, :]
-
+                token_type_ids = nsp_token_type_ids)[1]
+        
         mlm_logits, nsp_logits = mlm_nsp_classifier_model(mlm_features, nsp_features)
+        #mlm_logits = mlm_nsp_classifier_model(mlm_features)
+
+
         
         mlm_loss = loss_fct(mlm_logits.view(-1, number_of_tokens), mlm_labels.view(-1))
         nsp_loss = loss_fct(nsp_logits.view(-1, 2), nsp_labels.view(-1))
         
-        loss = mlm_loss + nsp_loss
-        loss_to_print = loss.item()
-        str_loss = "{0:.6f}".format(loss_to_print)
-        sentence = "ITERATION "+str(iteration+1)+" : "+str(str_loss)
-        log.info(sentence)
+        batch_loss = batch_loss + mlm_loss + nsp_loss
+        
+        if (iteration+1) % args.backprop_after == 0:
+            loss_to_print = batch_loss.item()
+            str_loss = "{0:.6f}".format(loss_to_print)
+            sentence = "ITERATION "+str(iteration+1)+" : "+str(str_loss)
+            log.info(sentence)
+            
 
-        optimizer_lm.zero_grad()
-        optimizer_mlm_nsp.zero_grad()
-        loss.backward()
-        optimizer_lm.step()
-        optimizer_mlm_nsp.step()
+            optimizer_lm.zero_grad()
+            optimizer_mlm_nsp.zero_grad()
+            batch_loss.backward()
+            optimizer_lm.step()
+            optimizer_mlm_nsp.step()
+
+            batch_loss = 0
+
         if (iteration+1) % args.save_after == 0:
             save_model(iteration)
     save_model(args.iterations)
@@ -214,6 +226,7 @@ if __name__ == "__main__" :
     parser.add_argument('--model_path', type = str, default = "../extened_bert/", help = 'path to the extended bert model')
     parser.add_argument('--log_file', type = str, help = 'path to the log file')
     parser.add_argument('--save_after', type = int, help = 'save the model after every save_after interations')
+    parser.add_argument('--backprop_after', type = int, help = 'back propagate after every backprop_after interations')
     args = parser.parse_args()
 
     number_of_tokens = get_number_of_tokens(args.model_path)
@@ -241,13 +254,14 @@ if __name__ == "__main__" :
     model.train()
     mlm_nsp_classifier_model.train()
 
-    optimizer_lm = torch.optim.Adam(model.parameters(), betas=(0.9, 0.99), 
-                                    eps=1e-08, lr = 1., weight_decay = 0.01) #optimizer for language model 
-    optimizer_mlm_nsp = torch.optim.Adam(mlm_nsp_classifier_model.parameters(),betas=(0.9, 0.99), 
-                                         eps=1e-08, lr = 1., weight_decay = 0.01) #optimizer for extra mlm classidier
+    optimizer_lm = torch.optim.Adam(model.parameters(), betas=(0.9, 0.999), 
+                                    eps=1e-08, lr = 1.) #optimizer for language model 
+    optimizer_mlm_nsp = torch.optim.Adam(mlm_nsp_classifier_model.parameters(),betas=(0.9, 0.999), 
+                                         eps=1e-08, lr = 1.) #optimizer for extra mlm classidier
 
     
     data_collator = DataCollatorForLanguageModeling(tokenizer, mlm = True) #data collator for masking
     nsp_data = TextDatasetForNextSentencePrediction(tokenizer, file_path = args.nsp_output_file_path, block_size = 256, nsp_probability = 0.5)
     
     train(args.iterations, args.batch_size)
+    
