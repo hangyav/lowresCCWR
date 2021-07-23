@@ -4,15 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from functools import reduce
 from torch import from_numpy
-
 import warnings
-warnings.simplefilter("ignore")
-
-import random
-
-torch.manual_seed(0)
-random.seed(0)
-np.random.seed(0)
+warnings.filterwarnings("ignore")
 
 
 use_cuda = torch.cuda.is_available()
@@ -27,32 +20,39 @@ else:
     from torch import from_numpy
 
 
-def get_bert(bert_model, bert_do_lower_case, model_type, use_saved=False):
-    from transformers import BertTokenizer, BertModel
-    from transformers import XLMRobertaTokenizer, XLMRobertaModel
-    from transformers import DistilBertTokenizer, DistilBertModel
-    from transformers import AlbertTokenizer, AlbertModel
-    from transformers import ElectraTokenizer, ElectraModel
-
-
-    if model_type == "bert": 
-        tokenizer = BertTokenizer.from_pretrained(bert_model, do_lower_case = bert_do_lower_case)
-        model = BertModel.from_pretrained(bert_model)
-    elif model_type == "distilbert": 
-        tokenizer = DistilBertTokenizer.from_pretrained(bert_model, do_lower_case = bert_do_lower_case)
-        model = DistilBertModel.from_pretrained(bert_model)
-    elif model_type == "albert": 
-        tokenizer = AlbertTokenizer.from_pretrained(bert_model, do_lower_case = bert_do_lower_case)
-        model = AlbertModel.from_pretrained(bert_model)
-    elif model_type == "electra": 
-        tokenizer = ElectraTokenizer.from_pretrained(bert_model, do_lower_case = bert_do_lower_case)
-        model = ElectraModel.from_pretrained(bert_model)
-    elif model_type == "xlm-roberta": 
-        tokenizer = XLMRobertaTokenizer.from_pretrained(bert_model, do_lower_case = bert_do_lower_case)
+def get_bert(bert_model, bert_do_lower_case, use_saved=False):
+    from transformers import BertTokenizer, BertModel, AutoTokenizer, AutoModel, AlbertTokenizer, AlbertModel, XLMRobertaTokenizer, XLMRobertaModel, DistilBertTokenizer, DistilBertModel
+    from transformers import ElectraModel, ElectraTokenizer
+    if not use_saved:
+        tokenizer =  XLMRobertaTokenizer.from_pretrained(bert_model, do_lower_case = bert_do_lower_case)
         model = XLMRobertaModel.from_pretrained(bert_model)
+    else:
+        tokenizer =  BertTokenizer.from_pretrained(bert_model, do_lower_case = bert_do_lower_case)
+        model = BertModel.from_pretrained(bert_model)
+        state_dict_1 = torch.load('./saved_models/pretrained_mbert_999.pt')
+        '''        
+        state_dict_2 = {}
+        for k, v in state_dict_1.items():
+          if 'bert' in k:
+            k = k.split(".")[1:]
+            k = ".".join(k)
+          state_dict_2[k] = v
+        '''
+        model.load_state_dict(state_dict_1)
+        
+    '''
     
-    if use_saved == True:
-        state_dict_1 = torch.load(save_path)['state_dict']
+    if not use_saved:
+        from transformers import BertTokenizer, BertModel
+        tokenizer = BertTokenizer.from_pretrained('./nepali_bert/')
+        model = BertModel.from_pretrained('./nepali_bert/')
+    
+    else:
+        from transformers import BertTokenizer, BertModel
+        model = BertModel.from_pretrained('./nepali_bert/')
+        tokenizer = BertTokenizer.from_pretrained('./nepali_bert/', do_lower_case = bert_do_lower_case)
+        state_dict_1 = torch.load('./saved_models/extended_nepali_bert_aligned_europarl_250K.pt')['state_dict']
+        
         state_dict_2 = {}
         for k, v in state_dict_1.items():
           if 'bert' in k:
@@ -60,6 +60,7 @@ def get_bert(bert_model, bert_do_lower_case, model_type, use_saved=False):
             k = ".".join(k)
           state_dict_2[k] = v
         model.load_state_dict(state_dict_2)
+    '''
     
     return tokenizer, model
 
@@ -69,9 +70,9 @@ class WordLevelBert(nn.Module):
     Runs BERT on sentences but only keeps the last subword embedding for
     each word.
     """
-    def __init__(self, model, do_lower_case, model_type, use_saved):
+    def __init__(self, model, do_lower_case, use_saved):
         super().__init__()
-        self.bert_tokenizer, self.bert = get_bert(model, do_lower_case, model_type, use_saved)
+        self.bert_tokenizer, self.bert = get_bert(model, do_lower_case, use_saved)
         #self.dim = self.bert.pooler.dense.in_features
         self.max_len = self.bert.embeddings.position_embeddings.num_embeddings
         
@@ -111,53 +112,110 @@ class WordLevelBert(nn.Module):
         # Mask with 1 for the last subword for each word.
         all_end_mask = np.zeros((len(sentences), self.max_len), dtype = int)
         max_sent = 0
+        all_avg_mask = np.zeros((len(sentences), self.max_len), dtype = int)
         for s_num, sentence in enumerate(sentences):
             tokens = []
             end_mask = []
-            if model_type == 'xlm-roberta':
-                tokens.append("<s>")
-            else:
-                tokens.append("[CLS]")
+            avg_mask = []
+            tokens.append("<s>")
+            avg_mask.append(0)
             end_mask.append(int(include_clssep))
+            current = 1
             for word in sentence:
                 word_tokens = self.bert_tokenizer.tokenize(word)
-                assert len(word_tokens) > 0, \
-                    "Unknown word: {} in {}".format(word, sentence)
-                for _ in range(len(word_tokens)):
+                assert len(word_tokens) > 0, "Unknown word: {} in {}".format(word, sentence)
+                for i in range(len(word_tokens)):
+                  if i == 0:
+                    end_mask.append(1)
+                  else:
                     end_mask.append(0)
-                end_mask[-1] = 1
+                if len(word_tokens) > 1:
+                  for _ in range(len(word_tokens)):
+                    avg_mask.append(current)
+                  current = current + 1
+                elif len(word_tokens) == 1:
+                  avg_mask.append(0)
+                #end_mask[-1] = 1
                 tokens.extend(word_tokens)
-            if model_type == 'xlm-roberta':
-                tokens.append("</s>")
-            else:
-                tokens.append("[SEP]")
+            tokens.append("</s>")
+            avg_mask.append(0)
+            #print(tokens)
+            #print(avg_mask)
             end_mask.append(int(include_clssep))
+            #print(end_mask)
             input_ids = self.bert_tokenizer.convert_tokens_to_ids(tokens)
             
             all_input_ids[s_num, :len(input_ids)] = input_ids
             all_input_mask[s_num, :len(input_ids)] = 1
             all_end_mask[s_num, :len(end_mask)] = end_mask
             max_sent = max(max_sent, len(input_ids))
+            all_avg_mask[s_num, 0:] = -1
+            all_avg_mask[s_num, 0:len(avg_mask)] = avg_mask
+            
+            
         all_input_ids = all_input_ids[:, :max_sent]
         all_input_ids = from_numpy(np.ascontiguousarray(all_input_ids))
         all_input_mask = all_input_mask[:, :max_sent]
         all_input_mask = from_numpy(np.ascontiguousarray(all_input_mask))
         all_end_mask = all_end_mask[:, :max_sent]
         all_end_mask = from_numpy(np.ascontiguousarray(all_end_mask))
-        
+        all_avg_mask = all_avg_mask[:, :max_sent]
+        #print(all_avg_mask.shape)
+        all_avg_mask = all_avg_mask.tolist()
         # all_input_ids: num_sentences x max_sentence_len
         features = self.bert(all_input_ids, attention_mask = all_input_mask,
-                                output_hidden_states = False)[0]
-        del _
-        # for each word, only keep last encoded token.
-        all_end_mask = all_end_mask.to(torch.uint8).unsqueeze(-1)
-        features_packed = features.masked_select(all_end_mask)
-        features_packed = features_packed.reshape(-1, features.shape[-1])
+                                output_hidden_states = False)['last_hidden_state']
         
-        assert features_packed.shape[0] == packed_len, "Features: {}, \
-            Packed len: {}".format(features_packed.shape[0], packed_len)
+        all_sentences = list()
+        for i in range(len(all_avg_mask)):
+          subword_sum = np.zeros((768, ))  
+          divide_by = 0
+          for j in range(len(all_avg_mask[i])): 
+            if all_avg_mask[i][j] == 0:
+              f = features[i,j, :]
+              f = f.detach().cpu().numpy().tolist()
+              all_sentences.append(f)
+            elif all_avg_mask[i][j] != 0 and all_avg_mask[i][j] != -1:
+              f = features[i, j, :]
+              f = f.detach().cpu().numpy()
+              subword_sum = np.add(subword_sum, f)
+              divide_by = divide_by + 1
+              if j <= len(all_avg_mask[i]) - 2:
+                if all_avg_mask[i][j+1] != all_avg_mask[i][j] or all_avg_mask[i][j+1] == -1 or  all_avg_mask[i][j+1] == 0:
+                  subword_sum = np.divide(subword_sum, divide_by)
+                  t = subword_sum.tolist()
+                  all_sentences.append(t)
+                  subword_sum = np.zeros((768, ))
+                  divide_by = 0
+              elif j == (len(all_avg_mask[i]) - 1):
+                subword_sum = np.divide(subword_sum, divide_by)
+                t = subword_sum.tolist()
+                all_sentences.append(t)
+                subword_sum = np.zeros((768, ))
+                divide_by = 0
+        all_sentences = torch.tensor(all_sentences, dtype = torch.float32)
+        #print(all_sentences.shape)
+           
+
+
+
+        del _
+        '''
+        # for each word, only keep last encoded token.
+        #print(all_end_mask.shape)
+        all_end_mask = all_end_mask.to(torch.uint8).unsqueeze(-1)
+        #print(all_end_mask.shape)
+        features_packed = features.masked_select(all_end_mask)
+        #print(features_packed.shape)
+        features_packed = features_packed.reshape(-1, features.shape[-1])
+        #print(features_packed.shape)
+        
+        #assert features_packed.shape[0] == packed_len, "Features: {}, \
+        #    Packed len: {}".format(features_packed.shape[0], packed_len)
         
         return features_packed
+        '''
+        return all_sentences
 
 def keep_1to1(alignments):
     if len(alignments) == 0:
@@ -176,7 +234,7 @@ def keep_1to1(alignments):
             alignments2.append(a)
     return np.array(alignments2)
 
-def load_align_corpus(sent_path, align_path, max_len = 64, max_sent = np.inf):
+def load_align_corpus(sent_path, align_path, max_len = 128, max_sent = np.inf):
     sentences_1 = []
     sentences_2 = []
     bad_idx = []
@@ -239,8 +297,20 @@ def load_align_corpus(sent_path, align_path, max_len = 64, max_sent = np.inf):
                 alignment = keep_1to1(alignment)
                 
                 alignments.append(alignment)
-                
-    return sentences_1, sentences_2, alignments
+    new_sentences_1 = []
+    new_sentences_2 = []
+    new_alignments = []
+    for a,b,c in zip(sentences_1, sentences_2, alignments):
+      d = c.tolist()
+      if len(d) < 1:
+        continue
+      new_sentences_1.append(a)
+      new_sentences_2.append(b)
+      new_alignments.append(c) 
+    del sentences_1
+    del sentences_2
+    del alignments         
+    return new_sentences_1, new_sentences_2, new_alignments
     
 def partial_sums(arr):
     for i in range(1, len(arr)):
@@ -253,8 +323,10 @@ def pick_aligned(sent_1, sent_2, align, cls_sep = True):
     sent_1, sent_2 - lists of sentences. each sentence is a list of words.
     align - lists of alignments. each alignment is a list of pairs (i,j).
     """
+  
     idx_1 = partial_sums([len(s) + 2 for s in sent_1])
     idx_2 = partial_sums([len(s) + 2 for s in sent_2])
+   
     align = [a + [i_1, i_2] for a, i_1, i_2 in zip(align, idx_1, idx_2)]
     align = reduce(lambda x, y: np.vstack((x, y)), align)
     align = align + 1 # to account for extra [CLS] at beginning
@@ -271,12 +343,12 @@ def pick_aligned(sent_1, sent_2, align, cls_sep = True):
     # pick out aligned tokens using ann_1[idx_1], ann_2[idx_2]
     return align[:, 0], align[:, 1]
     
-def align_bert_multiple(train, single_model, model, 
+def align_bert_multiple(train, model, model_base, 
                         num_sentences, languages, batch_size, 
                         splitbatch_size = 4, epochs = 1,
-                        learning_rate = 0.000005, learning_rate_warmup_frac = 0.1):
+                        learning_rate = 0.00005, learning_rate_warmup_frac = 0.1):
     # Adam hparams from Attention Is All You Need
-    trainer = torch.optim.Adam([param for param in single_model.parameters() if
+    trainer = torch.optim.Adam([param for param in model.parameters() if
                                 param.requires_grad], lr=1., 
                                betas=(0.9, 0.98), eps=1e-9)
                                
@@ -292,13 +364,13 @@ def align_bert_multiple(train, single_model, model,
             print("Warming up, iter {}/{}".format(iteration, learning_rate_warmup_steps))
             set_lr(iteration * warmup_coeff)
             
-    model.eval() # freeze and remember initial model
+    model_base.eval() # freeze and remember initial model
     
     total_processed = 0
     for epoch in range(epochs):
         for i in range(0, num_sentences, batch_size):
             loss = None
-            single_model.train()
+            model.train()
             schedule_lr(total_processed // (len(languages)))
             for j, language in enumerate(languages):
                 sent_1, sent_2, align = train[j]
@@ -317,18 +389,11 @@ def align_bert_multiple(train, single_model, model,
                     
                     # compute vectors for each position, pack the sentences
                     # result: packed_len x dim
-                    ann_1, ann_2_base = model(s_1), model(s_2)
-
-                    ann_1 = ann_1.unsqueeze(0)
-                    ann_1 = single_model(ann_1)
-                    ann_1 = ann_1.squeeze(0)
-
-                    ann_2 = ann_2_base.unsqueeze(0)
-                    ann_2 = single_model(ann_2)
-                    ann_2 = ann_2.squeeze(0)
-                    #ann_2_base = model_base(s_2)
-                    
-                    loss_1 = F.mse_loss(ann_1[idx_1], ann_2[idx_2])
+                    ann_1, ann_2 = model(s_1), model(s_2)
+                    ann_2_base = model_base(s_2)
+                    #target_shape = ann_1[idx_1].shape[0]
+                    #targets = torch.ones(target_shape, 1).to('cuda')
+                    loss_1 = F.mse_loss(ann_1[idx_1], ann_2_base[idx_2])
                     loss_2 = F.mse_loss(ann_2, ann_2_base)
                     loss_batch = loss_1 + loss_2
                     if loss is None: 
@@ -343,10 +408,8 @@ def align_bert_multiple(train, single_model, model,
             trainer.step()
             trainer.zero_grad()
                 
-    #torch.save({'state_dict': model.state_dict(),
-    #            'trainer' : trainer.state_dict(),}, save_path)
-    model_state_dict = single_model.state_dict()
-    torch.save(model_state_dict, save_path)
+    torch.save({'state_dict': model.state_dict(),
+                'trainer' : trainer.state_dict(),}, './saved_models/bangla_electra_aligned_50K.pt')
 
 def normalize(vecs):
     norm = np.array([np.linalg.norm(vecs)])
@@ -383,23 +446,13 @@ def bestk_idx_CSLS(x, vecs, vec_hubness, k = 5):
     sim = 2 * vecs.dot(x) - vec_hubness
     return np.argsort(-sim)[:k]
 
-def evaluate_retrieval_context(dev, model, single_model):
+def evaluate_retrieval_context(dev, model):
     sent_1, sent_2, align = dev
     idx_1, idx_2 = pick_aligned(sent_1, sent_2, align)
     model.eval()
     with torch.no_grad():
-        ann_1 = model(sent_1)
-        ann_1 = ann_1.unsqueeze(0)
-        ann_1 = single_model(ann_1)
-        ann_1 = ann_1.squeeze(0)
-        ann_1 = ann_1[idx_1].detach().cpu().numpy()
-        ann_2 = model(sent_2)
-        ann_2 = ann_2.unsqueeze(0)
-        ann_2 = single_model(ann_2)
-        ann_2 = ann_2.squeeze(0)
-        ann_2 = ann_2[idx_2].detach().cpu().numpy()
-
-        #ann_2 = model(sent_2)[idx_2].detach().cpu().numpy()
+        ann_1 = model(sent_1)[idx_1].detach().cpu().numpy()
+        ann_2 = model(sent_2)[idx_2].detach().cpu().numpy()
     hub_1, hub_2 = hubness_CSLS(ann_1, ann_2)
     matches_1 = [bestk_idx_CSLS(ann, ann_2, hub_2)[0] for ann in ann_1]
     matches_2 = [bestk_idx_CSLS(ann, ann_1, hub_1)[0] for ann in ann_2]
@@ -408,22 +461,22 @@ def evaluate_retrieval_context(dev, model, single_model):
     return acc_1, acc_2
 
 
-def evaluate_retrieval_noncontext(dev, model, single_model):
+def evaluate_retrieval_noncontext(dev, model):
     sent_1, sent_2, align = dev
     idx_1, idx_2 = pick_aligned(sent_1, sent_2, align)
     all_words=[]
     for j in sent_1:
-      all_words.extend(["[CLS]"])
+      all_words.extend(["<s>"])
       all_words.extend(j)
-      all_words.extend(["[SEP]"])
+      all_words.extend(["</s>"])
     final_1=[]
     for i in idx_1:
       final_1.append(all_words[i])
     all_words=[]
     for j in sent_2:
-      all_words.extend(["[CLS]"])
+      all_words.extend(["<s>"])
       all_words.extend(j)
-      all_words.extend(["[SEP]"])
+      all_words.extend(["</s>"])
     final_2=[]
     for i in idx_2:
       final_2.append(all_words[i])
@@ -440,16 +493,8 @@ def evaluate_retrieval_noncontext(dev, model, single_model):
   
     model.eval()
     with torch.no_grad():
-        ann_1 = model(sent_1)
-        ann_1 = ann_1.unsqueeze(0)
-        ann_1 = single_model(ann_1)
-        ann_1 = ann_1.squeeze(0)
-        ann_1 = ann_1[idx_1].detach().cpu().numpy()
-        ann_2 = model(sent_2)
-        ann_2 = ann_2.unsqueeze(0)
-        ann_2 = single_model(ann_2)
-        ann_2 = ann_2.squeeze(0)
-        ann_2 = ann_2[idx_2].detach().cpu().numpy()
+        ann_1 = model(sent_1)[final_idx_1].detach().cpu().numpy()
+        ann_2 = model(sent_2)[final_idx_2].detach().cpu().numpy()
     hub_1, hub_2 = hubness_CSLS(ann_1, ann_2)
     matches_1 = [bestk_idx_CSLS(ann, ann_2, hub_2)[0] for ann in ann_1]
     matches_2 = [bestk_idx_CSLS(ann, ann_1, hub_1)[0] for ann in ann_2]
@@ -461,89 +506,75 @@ def evaluate_retrieval_noncontext(dev, model, single_model):
 # for dev they used following 1024 sentences and for training they used the following 250000 sentences bur for nepali 
 # there are only 67869 sentences. 
 # So we should put 67869 here
+num_sent = 3000
+num_dev = 1024
+num_test = 1024
 
-class Single_Linear(nn.Module):
-    def __init__(self, use_cuda = False):
-        super(Single_Linear, self).__init__()
-        self.linear_layer = nn.Linear(768, 768, bias = False)
-        if use_cuda == True:
-            self.cuda()
-    
-    def forward(self, data):
-        x = self.linear_layer(data)
-        return x
-
-class Single_Transformer_Encoder(nn.Module):
-    def __init__(self, use_cuda = False):
-        super(Single_Transformer_Encoder, self).__init__()
-        self.transformer_encoder = nn.TransformerEncoderLayer(d_model = 768, nhead = 8)
-        if use_cuda == True:
-            self.cuda()
-    
-    def forward(self, data):
-        x = self.transformer_encoder(data)
-        return x
-
-
-
-num_sent = 20000
-num_dev = 10
-num_test = 10
-
-
-model_type = 'bert'
-src_model_name = 'bert-base-multilingual-cased'
-src_lower_case = False
-tgt_model_name = 'bert-base-multilingual-cased'
-single_layer_type = 'linear'
-tgt_lower_case = False
-save_directory = 'saved_models/'
-save_name = 'test.mbert.'+single_layer_type+'.bn-de-en.pt'
-save_path = save_directory + save_name
-base_directory = 'data/'
-
-
-#languages = ['de', 'bn']
 languages = ['de']
-#languages = ['bn']
-sent_paths = [base_directory+'europarl-v7.de-en.token.clean.reverse']#,
-              #base_directory+'merged.bn-en.clean.shuffled.processed']
+sent_paths = ['data/europarl-v7.de-en.token.clean']
+              #'data/final.data.clean.2.txt']
+              #'data/merged.bn-en.clean.shuffled.processed']
 
-align_paths = [base_directory+'europarl-v7.de-en.intersect.reverse']#,
-               #base_directory+'merged.bn-en.alignment.clean.shuffled.processed']
+align_paths = ['data/europarl-v7.de-en.intersect']
+               #'data/final.data.clean.2.intersect']
+               #'data/merged.bn-en.alignment.clean.shuffled.processed']
 
 data = [load_align_corpus(sent_path, align_path, max_sent = num_sent) for
         sent_path, align_path in zip(sent_paths, align_paths)]
 
-'''
-#training codes start here,  comment these following five lines during validation and testing
-if single_layer_type == 'linear':
-    single_layer = Single_Linear(use_cuda = True)
-else:
-    single_layer = Single_Transformer_Encoder(use_cuda = True)
 
-model = WordLevelBert(src_model_name, src_lower_case, model_type, use_saved=False)
-#model_base = WordLevelBert(tgt_model_name, tgt_lower_case, model_type, use_saved=False)
+#training codes start here,  comment these following five lines during validation and testing
+'''
+model = WordLevelBert('./extended_mbert/', False, use_saved=False)
+model_base = WordLevelBert('./extended_mbert/', False, use_saved=False)
 
 train = [(sent_1[num_test+num_dev:], sent_2[num_test+num_dev:], align[num_test+num_dev:]) for sent_1, sent_2, align in data]
 
-batch_size = 32 #their default was given 8 please change it i used 4 because of memory issue
+batch_size = 4 #their default was given 8 please change it i used 4 because of memory issue
 epochs = 1 #their default was given 1
-learning_rate=0.000001 #their default was given 0.00005
-align_bert_multiple(train, single_layer, model, num_sent, languages, batch_size, learning_rate=learning_rate, epochs=epochs)
+learning_rate=0.00005 #their default was given 0.00005
+align_bert_multiple(train, model, model_base, num_sent, languages, batch_size, learning_rate=learning_rate, epochs=epochs)
 
 #training codes end here
 
+#They didnt use dev set for alignment in their given script so commenting it out
+#validation codes start here,  comment these following five lines during training and testing
+dev = [(sent_1[num_test:num_test+num_dev], sent_2[num_test:num_test+num_dev], align[num_test:num_test+num_dev]) for sent_1, sent_2, align in data]
+model = WordLevelBert('bert-base-multilingual-cased', False, use_saved=True)
+for lang, dev_lang in zip(languages, dev):
+    print(lang)
+    print("Word retrieval accuracy:", evaluate_retrieval(dev_lang, model))
+#validation codes end here
+
 '''
 #test code start here ,  comment these following five lines during training and validation
-if single_layer_type == 'linear':
-    single_layer = Single_Linear(use_cuda = False)
-else:
-    single_layer = Single_Transformer_Encoder(use_cuda = True)
-single_layer.load_state_dict(torch.load(save_path))
 test = [(sent_1[:num_test], sent_2[:num_test], align[:num_test]) for sent_1, sent_2, align in data] 
-model = WordLevelBert(src_model_name, src_lower_case, model_type, use_saved=False) 
+
+
+
+model = WordLevelBert('xlm-roberta-base', True, use_saved=False) 
 print('\nContext Evaluation: \n')
 for lang, dev_lang in zip(languages, test):
     print("For "+str(lang)+"-en  : ")
-    print("Word retrieval accuracy:", evaluate_retrieval_context(dev_lang, model, single_layer))
+    print("Word retrieval accuracy:", evaluate_retrieval_context(dev_lang, model))
+
+print('\nNon Context Evaluation: \n')
+for lang, dev_lang in zip(languages, test):
+    print("For "+str(lang)+"-en  : ")
+    print("Word retrieval accuracy:", evaluate_retrieval_noncontext(dev_lang, model))
+
+'''
+model1 = WordLevelBert('ai4bharat/indic-bert', False, use_saved=False) 
+model2 = WordLevelBert('ai4bharat/indic-bert', False, use_saved=False)
+
+print('\nContext Evaluation: \n')
+for lang, dev_lang in zip(languages, test):
+    print("For "+str(lang)+"-en  : ")
+    print("Word retrieval accuracy:", evaluate_retrieval_context(dev_lang, model1, model2))
+
+print('\nNon Context Evaluation: \n')
+for lang, dev_lang in zip(languages, test):
+    print("For "+str(lang)+"-en  : ")
+    print("Word retrieval accuracy:", evaluate_retrieval_noncontext(dev_lang, model1, model2))
+#test codes end here
+'''
