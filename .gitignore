@@ -138,3 +138,4 @@ bert_pretrain/log_mlm_nsp.txt
 bert_pretrain/mlm_file_ne.txt
 bert_pretrain/nsp_file_ne.txt
 bert_pretrain/temp_nsp_file_ne.txt
+cao_align/data
