@@ -6,23 +6,22 @@ from functools import reduce
 from torch import from_numpy
 import argparse
 from tqdm import tqdm
+import os
+import logging
 import warnings
 warnings.filterwarnings("ignore")
 
-
-use_cuda = torch.cuda.is_available()
-if use_cuda:
-    print("Using CUDA!")
-    torch_t = torch.cuda
-    def from_numpy(ndarray):
-        return torch.from_numpy(ndarray).pin_memory().cuda()
-else:
-    print("Not using CUDA!")
-    torch_t = torch
-    from torch import from_numpy
+logger = logging.getLogger(__name__)
 
 
 def get_bert(bert_model, bert_do_lower_case, model_path=None):
+    if model_path is None or model_path.endswith('.pt'):
+        return get_bert_from_state_dict(bert_model, bert_do_lower_case, model_path)
+    else:
+        return get_bert_from_pretrained(model_path)
+
+
+def get_bert_from_state_dict(bert_model, bert_do_lower_case, model_path=None):
     with tqdm(desc='Loading model', total=4 if model_path else 2) as pbar:
         #  from transformers import AutoTokenizer, AutoModel, AlbertTokenizer, AlbertModel, XLMRobertaTokenizer, XLMRobertaModel, DistilBertTokenizer, DistilBertModel
         #  from transformers import ElectraModel, ElectraTokenizer
@@ -65,6 +64,18 @@ def get_bert(bert_model, bert_do_lower_case, model_path=None):
             pbar.update(1)
 
     return tokenizer, model
+
+
+def get_bert_from_pretrained(model_path):
+    with tqdm(desc='Loading model', total=2) as pbar:
+        from transformers import BertTokenizer, BertModel
+        model = BertModel.from_pretrained(model_path)
+        pbar.update(1)
+
+        tokenizer = BertTokenizer.from_pretrained(model_path)
+        pbar.update(1)
+
+        return tokenizer, model
 
 
 class WordLevelBert(nn.Module):
@@ -438,7 +449,7 @@ def align_bert_multiple(train, model, model_base,
     def schedule_lr(iteration):
         iteration = iteration + 1
         if iteration <= learning_rate_warmup_steps:
-            print("Warming up, iter {}/{}".format(iteration, learning_rate_warmup_steps))
+            logger.info("Warming up, iter {}/{}".format(iteration, learning_rate_warmup_steps))
             set_lr(iteration * warmup_coeff)
 
     model_base.eval() # freeze and remember initial model
@@ -479,7 +490,7 @@ def align_bert_multiple(train, model, model_base,
                         loss += loss_batch
                 total_processed += len(ss_1)
 
-            print("Sentences {}-{}/{}, Loss: {}".format(
+            logger.info("Sentences {}-{}/{}, Loss: {}".format(
                     i, min(i+batch_size, num_sentences), num_sentences, loss))
             loss.backward()
             trainer.step()
@@ -621,11 +632,15 @@ if __name__ == '__main__':
     parser.add_argument('--languages', nargs='*', default=['es', 'bg', 'fr', 'de', 'el', 'ne'], help='Languages to use')
     parser.add_argument('--mode', choices=['train', 'valid', 'test'], nargs='*', default=['train'], help='Run mode')
     parser.add_argument('--model_type', default='bert-base-multilingual-cased', help='Model type or folder containing a custom one')
-    parser.add_argument('--model', default='none', help='Model to save or load')
+    parser.add_argument('--model_path', default='none', help='Model to save or load')
+    parser.add_argument('--data_dir', required=True, help='Dir of aligned data')
+    parser.add_argument('--cuda', default=None, help='Use a GPU or not')
     args = parser.parse_args()
 
-    #  number of sentences used for experiment train_set+test_set+dev_set for testing they used first 1024 sentences,
-    # for dev they used following 1024 sentences and for training they used the following 250000 sentences bur for nepali
+    #  number of sentences used for experiment train_set+test_set+dev_set for
+    #  testing they used first 1024 sentences,
+    # for dev they used following 1024 sentences and for training they used the
+    # following 250000 sentences bur for nepali
     # there are only 67869 sentences.
     # So we should put 67869 here
     num_sent = 3000
@@ -635,25 +650,43 @@ if __name__ == '__main__':
     languages = args.languages
     mode = args.mode
     model_type = args.model_type
-    model_path = args.model if args.model.lower() != 'none' else None
+    model_path = args.model_path if args.model_path.lower() != 'none' else None
+    data_dir = args.data_dir
     do_lower_case = False
 
+    if args.cuda is None:
+        use_cuda = torch.cuda.is_available()
+    else:
+        use_cuda = int(args.cuda) != 0
+    if use_cuda:
+        logger.info("Using CUDA!")
+        torch_t = torch.cuda
+        def from_numpy(ndarray):
+            return torch.from_numpy(ndarray).pin_memory().cuda()
+    else:
+        logger.info("Not using CUDA!")
+        torch_t = torch
+        from torch import from_numpy
+
+
     sent_paths = {
-            'es': 'data/europarl-v7.es-en.token.clean',
-            'bg': 'data/europarl-v7.bg-en.token.clean',
-            'fr': 'data/europarl-v7.fr-en.token.clean',
-            'de': 'data/europarl-v7.de-en.token.clean',
-            'el': 'data/europarl-v7.el-en.token.clean',
-            'ne': 'data/europarl-v7.ne-en.token.clean',
+            'es': os.path.join(data_dir, 'europarl-v7.es-en.token.clean'),
+            'bg': os.path.join(data_dir, 'europarl-v7.bg-en.token.clean'),
+            'fr': os.path.join(data_dir, 'europarl-v7.fr-en.token.clean'),
+            'de': os.path.join(data_dir, 'europarl-v7.de-en.token.clean'),
+            'el': os.path.join(data_dir, 'europarl-v7.el-en.token.clean'),
+            #  'ne': os.path.join(data_dir, 'europarl-v7.ne-en.token.clean'),
+            'ne': os.path.join(data_dir, 'final.data.clean.2.txt'),
     }
 
     align_paths = {
-            'es': 'data/europarl-v7.es-en.intersect',
-            'bg': 'data/europarl-v7.bg-en.intersect',
-            'fr': 'data/europarl-v7.fr-en.intersect',
-            'de': 'data/europarl-v7.de-en.intersect',
-            'el': 'data/europarl-v7.el-en.intersect',
-            'ne': 'data/europarl-v7.ne-en.intersect',
+            'es': os.path.join(data_dir, 'europarl-v7.es-en.intersect'),
+            'bg': os.path.join(data_dir, 'europarl-v7.bg-en.intersect'),
+            'fr': os.path.join(data_dir, 'europarl-v7.fr-en.intersect'),
+            'de': os.path.join(data_dir, 'europarl-v7.de-en.intersect'),
+            'el': os.path.join(data_dir, 'europarl-v7.el-en.intersect'),
+            #  'ne': os.path.join(data_dir, 'europarl-v7.ne-en.intersect'),
+            'ne': os.path.join(data_dir, 'final.data.clean.2.intersect'),
     }
 
     data = [load_align_corpus(sent_paths[lang], align_paths[lang], max_sent=num_sent)

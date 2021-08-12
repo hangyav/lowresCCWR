@@ -16,9 +16,11 @@ def convert_state_dict(state_dict, prefix='bert'):
     return state_dict_2
 
 
-def get_tokenizer_model(base_model_type, state_dict):
-    tokenizer = AutoTokenizer.from_pretrained(base_model_type)
+def get_tokenizer_model(base_model_type, state_dict, tokenizer):
+    tokenizer = AutoTokenizer.from_pretrained(
+        tokenizer if tokenizer else base_model_type)
     model = AutoModelForPreTraining.from_pretrained(base_model_type)
+    model.resize_token_embeddings(len(tokenizer))
 
     if state_dict is not None:
         state_dict = torch.load(state_dict, map_location=model.device)['state_dict']
@@ -38,10 +40,12 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--state_dict', help='Model weights to load')
     parser.add_argument('--base_model_type', default='bert-base-multilingual-cased', help='Type of base model')
-    parser.add_argument('--output', help='Folder to save to')
+    parser.add_argument('--tokenizer', help='Type of base model')
+    parser.add_argument('--output', help='Folder to save to', required=True)
     args = parser.parse_args()
 
-    tokenizer, model = get_tokenizer_model(args.base_model_type, args.state_dict)
+    tokenizer, model = get_tokenizer_model(args.base_model_type, args.state_dict,
+                                           args.tokenizer)
 
     model.save_pretrained(args.output)
     tokenizer.save_pretrained(args.output)
