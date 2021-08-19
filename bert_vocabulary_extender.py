@@ -6,7 +6,7 @@ from tokenizers import normalizers
 from tokenizers.normalizers import Lowercase, NFD, StripAccents
 from tokenizers.pre_tokenizers import Whitespace
 from tokenizers.processors import TemplateProcessing
-from transformers import BertTokenizerFast, BertForPreTraining
+from transformers import BertTokenizer, BertForPreTraining
 import logging
 from tqdm import tqdm
 logger = logging.getLogger(__name__)
@@ -14,7 +14,8 @@ logger = logging.getLogger(__name__)
 
 def extend_bert(model_path, train_data, vocab_size):
     logger.warning('Loading...')
-    tokenizer = BertTokenizerFast.from_pretrained(model_path)
+    # Do not use fast tokenizer
+    tokenizer = BertTokenizer.from_pretrained(model_path)
 
     tok_unk = tokenizer.unk_token
     tok_cls = tokenizer.cls_token
