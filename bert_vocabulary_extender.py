@@ -8,6 +8,7 @@ from tokenizers.pre_tokenizers import Whitespace
 from tokenizers.processors import TemplateProcessing
 from transformers import BertTokenizerFast, BertForPreTraining
 import logging
+from tqdm import tqdm
 logger = logging.getLogger(__name__)
 
 
@@ -52,7 +53,13 @@ def extend_bert(model_path, train_data, vocab_size):
     logger.warning('Training new tokenizer...')
     new_tokenizer.train([train_data], trainer)
 
-    num = tokenizer.add_tokens(list(new_tokenizer.get_vocab().keys()))
+    # this makes the tokenizer slow
+    #  num = tokenizer.add_tokens(list(new_tokenizer.get_vocab().keys()))
+    num = 0
+    for w in tqdm(list(new_tokenizer.get_vocab().keys()), desc="Adding tokens"):
+        if w not in tokenizer.vocab:
+            tokenizer.vocab[w] = len(tokenizer.vocab)
+            num += 1
     logger.warning(f'Added {num} new tokens')
 
     model = BertForPreTraining.from_pretrained(model_path)

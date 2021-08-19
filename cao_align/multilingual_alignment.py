@@ -11,6 +11,7 @@ import logging
 import warnings
 warnings.filterwarnings("ignore")
 
+logging.basicConfig(encoding='utf-8', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -84,11 +85,12 @@ class WordLevelBert(nn.Module):
     each word.
     """
 
-    def __init__(self, model, do_lower_case, model_path=None):
+    def __init__(self, model, do_lower_case, model_path=None, use_cuda=True):
         super().__init__()
         self.bert_tokenizer, self.bert = get_bert(model, do_lower_case, model_path)
         #  self.dim = self.bert.pooler.dense.in_features
         self.max_len = self.bert.embeddings.position_embeddings.num_embeddings
+        self.use_cuda = use_cuda
 
         if use_cuda:
             self.cuda()
@@ -104,6 +106,11 @@ class WordLevelBert(nn.Module):
             else:
                 ann_full = torch.cat((ann_full, ann), dim = 0)
         return ann_full
+
+    def from_numpy(self, ndarray):
+        if self.use_cuda:
+            return torch.from_numpy(ndarray).pin_memory().cuda()
+        return from_numpy(ndarray)
 
     def annotate(self, sentences, include_clssep=True):
         return self.annotate_bert(sentences, include_clssep)
@@ -151,18 +158,20 @@ class WordLevelBert(nn.Module):
             all_end_mask[s_num, :len(end_mask)] = end_mask
             max_sent = max(max_sent, len(input_ids))
         all_input_ids = all_input_ids[:, :max_sent]
-        all_input_ids = from_numpy(np.ascontiguousarray(all_input_ids))
+        all_input_ids = self.from_numpy(np.ascontiguousarray(all_input_ids))
         all_input_mask = all_input_mask[:, :max_sent]
-        all_input_mask = from_numpy(np.ascontiguousarray(all_input_mask))
+        all_input_mask = self.from_numpy(np.ascontiguousarray(all_input_mask))
         all_end_mask = all_end_mask[:, :max_sent]
-        all_end_mask = from_numpy(np.ascontiguousarray(all_end_mask))
+        all_end_mask = self.from_numpy(np.ascontiguousarray(all_end_mask))
 
         # all_input_ids: num_sentences x max_sentence_len
-        features, _ = self.bert(all_input_ids, attention_mask=all_input_mask,
-                                output_hidden_states=False)
+        #  features, _ = self.bert(all_input_ids, attention_mask=all_input_mask,
+        #                          output_hidden_states=False)
+        features = self.bert(all_input_ids, attention_mask=all_input_mask,
+                                output_hidden_states=False)['last_hidden_state']
         #  features, _ = self.bert(all_input_ids, attention_mask=all_input_mask,
         #                          output_all_encoded_layers=False)
-        del _
+        #  del _
         # for each word, only keep last encoded token.
         all_end_mask = all_end_mask.to(torch.uint8).unsqueeze(-1)
         features_packed = features.masked_select(all_end_mask)
@@ -236,11 +245,11 @@ class WordLevelBert(nn.Module):
 
 
         all_input_ids = all_input_ids[:, :max_sent]
-        all_input_ids = from_numpy(np.ascontiguousarray(all_input_ids))
+        all_input_ids = self.from_numpy(np.ascontiguousarray(all_input_ids))
         all_input_mask = all_input_mask[:, :max_sent]
-        all_input_mask = from_numpy(np.ascontiguousarray(all_input_mask))
+        all_input_mask = self.from_numpy(np.ascontiguousarray(all_input_mask))
         all_end_mask = all_end_mask[:, :max_sent]
-        all_end_mask = from_numpy(np.ascontiguousarray(all_end_mask))
+        all_end_mask = self.from_numpy(np.ascontiguousarray(all_end_mask))
         all_avg_mask = all_avg_mask[:, :max_sent]
         #print(all_avg_mask.shape)
         all_avg_mask = all_avg_mask.tolist()
@@ -660,13 +669,13 @@ if __name__ == '__main__':
         use_cuda = int(args.cuda) != 0
     if use_cuda:
         logger.info("Using CUDA!")
-        torch_t = torch.cuda
-        def from_numpy(ndarray):
-            return torch.from_numpy(ndarray).pin_memory().cuda()
+        #  torch_t = torch.cuda
+        #  def from_numpy(ndarray):
+        #      return torch.from_numpy(ndarray).pin_memory().cuda()
     else:
         logger.info("Not using CUDA!")
-        torch_t = torch
-        from torch import from_numpy
+        #  torch_t = torch
+        #  from torch import from_numpy
 
 
     sent_paths = {
@@ -696,8 +705,10 @@ if __name__ == '__main__':
         assert model_path is not None
         #  training codes start here,  comment these following five lines
         #  during validation and testing
-        model = WordLevelBert(model_type, do_lower_case, model_path=model_path)
-        model_base = WordLevelBert(model_type, do_lower_case, model_path=model_path)
+        model = WordLevelBert(model_type, do_lower_case,
+                              model_path=model_path, use_cuda=use_cuda)
+        model_base = WordLevelBert(
+            model_type, do_lower_case, model_path=model_path, use_cuda=use_cuda)
 
         train = [(sent_1[num_test+num_dev:], sent_2[num_test+num_dev:], align[num_test+num_dev:]) for sent_1, sent_2, align in data]
 
@@ -715,7 +726,8 @@ if __name__ == '__main__':
         #  it out validation codes start here,  comment these following five lines
         #  during training and testing
         dev = [(sent_1[num_test:num_test+num_dev], sent_2[num_test:num_test+num_dev], align[num_test:num_test+num_dev]) for sent_1, sent_2, align in data]
-        model = WordLevelBert(model_type, do_lower_case, model_path=model_path)
+        model = WordLevelBert(model_type, do_lower_case,
+                              model_path=model_path, use_cuda=use_cuda)
         for lang, dev_lang in zip(languages, dev):
             print(lang)
             print("Word retrieval accuracy:", evaluate_retrieval_context(dev_lang, model), flush=True)
@@ -725,7 +737,8 @@ if __name__ == '__main__':
         #  training and validation
         test = [(sent_1[:num_test], sent_2[:num_test], align[:num_test]) for sent_1, sent_2, align in data]
 
-        model = WordLevelBert(model_type, do_lower_case, model_path=model_path)
+        model = WordLevelBert(model_type, do_lower_case,
+                              model_path=model_path, use_cuda=use_cuda)
         print('\nContext Evaluation: \n')
         for lang, dev_lang in zip(languages, tqdm(test)):
             print("For "+str(lang)+"-en  : ")
