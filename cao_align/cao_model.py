@@ -44,15 +44,8 @@ class BertForCaoAlign(BertPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.bert = BertModel(config)
-        self.bert_base = None
         self.subword_to_token_strategy = SubwordToTokenStrategyLast()
         self.init_weights()
-
-    def init_base_model(self, *args, **kwargs):
-        # TODO this is not too nice
-        self.bert_base = BertModel.from_pretrained(*args, **kwargs)
-        for param in self.bert_base.parameters():
-            param.requires_grad = False
 
     def forward(
         self,
@@ -67,13 +60,10 @@ class BertForCaoAlign(BertPreTrainedModel):
         alignment,
         include_clssep=True,
         return_dict=None,
+        bert_base=None,
     ):
         return_dict = return_dict if return_dict is not None \
                 else self.config.use_return_dict
-
-        for param in self.bert_base.parameters():
-            # just to check if BERT.from_pretrained changes this
-            assert not param.requires_grad
 
         src_features = self._process_sentences(
                 src_input_ids,
@@ -97,7 +87,7 @@ class BertForCaoAlign(BertPreTrainedModel):
                 trg_word_ids_lst,
                 trg_special_word_masks,
                 include_clssep,
-                self.bert_base,
+                bert_base,
         )
 
         src_idxs, trg_idxs = self._get_ligned_indices(
@@ -264,6 +254,7 @@ class CaoTrainer(Trainer):
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        bert_base: PreTrainedModel = None,
     ):
         super().__init__(
             model,
@@ -277,6 +268,9 @@ class CaoTrainer(Trainer):
             callbacks,
             optimizers
         )
+        self.bert_base = bert_base
+        for param in self.bert_base.parameters():
+            assert not param.requires_grad
 
     def get_train_dataloader(self):
         """
@@ -287,54 +281,97 @@ class CaoTrainer(Trainer):
 
         Subclass and override this method if you want to inject some custom behavior.
         """
-        datasets = self.train_dataset.datasets.values()
-        data_loaders = [self._get_single_train_dataloader(d) for d in datasets]
+        if self.train_dataset is None:
+            raise ValueError("Trainer: training requires a train_dataset.")
+
+        return self._get_data_loader(
+                self.train_dataset,
+                self.args.train_batch_size,
+                self.args.per_device_train_batch_size,
+                'training',
+        )
+
+    def get_eval_dataloader(self, eval_dataset: Optional[Dataset] = None) -> DataLoader:
+        if eval_dataset is None and self.eval_dataset is None:
+            raise ValueError("Trainer: evaluation requires an eval_dataset.")
+
+        eval_datasets = eval_dataset if eval_dataset is not None else self.eval_dataset
+        return self._get_data_loader(
+                eval_datasets,
+                self.args.eval_batch_size,
+                self.args.per_device_eval_batch_size,
+                'evaluation',
+        )
+
+    def get_test_dataloader(self, test_dataset: Dataset) -> DataLoader:
+        return self._get_data_loader(
+                test_dataset,
+                self.args.eval_batch_size,
+                self.args.per_device_eval_batch_size,
+                'test',
+        )
+
+    def _get_data_loader(self, datasets, batch_size, per_device_batch_size,
+                         description):
+        data_loaders = [
+            self._get_single_dataloader(d,
+                                        batch_size, per_device_batch_size,
+                                        description
+                                        )
+            for d in datasets.datasets.values()
+        ]
 
         if len(data_loaders) == 1:
             return data_loaders[0]
 
         return MultiDataLoader(
-                self.train_dataset,
+                datasets,
                 data_loaders,
-                self.args.train_batch_size,
+                batch_size,
         )
 
-    def _get_single_train_dataloader(self, train_dataset) -> DataLoader:
-        if is_datasets_available() and isinstance(train_dataset, Dataset):
-            train_dataset = self._remove_unused_columns(train_dataset, description="training")
+    def _get_single_dataloader(self, dataset, batch_size,
+            per_device_batch_size, description) -> DataLoader:
 
-        if isinstance(train_dataset, torch.utils.data.dataset.IterableDataset):
+        if is_datasets_available() and isinstance(dataset, Dataset):
+            dataset = self._remove_unused_columns(dataset, description=description)
+
+        if isinstance(dataset, torch.utils.data.dataset.IterableDataset):
             if self.args.world_size > 1:
-                train_dataset = IterableDatasetShard(
-                    train_dataset,
-                    batch_size=self.args.train_batch_size,
+                dataset = IterableDatasetShard(
+                    dataset,
+                    batch_size=batch_size,
                     drop_last=self.args.dataloader_drop_last,
                     num_processes=self.args.world_size,
                     process_index=self.args.process_index,
                 )
 
             return DataLoader(
-                train_dataset,
-                batch_size=self.args.train_batch_size,
+                dataset,
+                batch_size=batch_size,
                 collate_fn=self.data_collator,
                 num_workers=self.args.dataloader_num_workers,
                 pin_memory=self.args.dataloader_pin_memory,
             )
 
-        train_sampler = self._get_single_train_sampler(train_dataset)
+        sampler = self._get_single_sampler(
+            dataset,
+            batch_size,
+            per_device_batch_size
+        )
 
         return DataLoader(
-            train_dataset,
-            batch_size=self.args.train_batch_size,
-            sampler=train_sampler,
+            dataset,
+            batch_size=batch_size,
+            sampler=sampler,
             collate_fn=self.data_collator,
             drop_last=self.args.dataloader_drop_last,
             num_workers=self.args.dataloader_num_workers,
             pin_memory=self.args.dataloader_pin_memory,
         )
 
-    def _get_single_train_sampler(self, train_dataset) -> Optional[torch.utils.data.sampler.Sampler]:
-        if not isinstance(train_dataset, Sized):
+    def _get_single_sampler(self, dataset, batch_size, per_device_batch_size) -> Optional[torch.utils.data.sampler.Sampler]:
+        if not isinstance(dataset, Sized):
             return None
 
         generator = None
@@ -344,10 +381,10 @@ class CaoTrainer(Trainer):
 
         # Build the sampler.
         if self.args.group_by_length:
-            if is_datasets_available() and isinstance(train_dataset, Dataset):
+            if is_datasets_available() and isinstance(dataset, Dataset):
                 lengths = (
-                    train_dataset[self.args.length_column_name]
-                    if self.args.length_column_name in train_dataset.column_names
+                    dataset[self.args.length_column_name]
+                    if self.args.length_column_name in dataset.column_names
                     else None
                 )
             else:
@@ -355,16 +392,16 @@ class CaoTrainer(Trainer):
             model_input_name = self.tokenizer.model_input_names[0] if self.tokenizer is not None else None
             if self.args.world_size <= 1:
                 return LengthGroupedSampler(
-                    train_dataset,
-                    self.args.train_batch_size,
+                    dataset,
+                    batch_size,
                     lengths=lengths,
                     model_input_name=model_input_name,
                     generator=generator,
                 )
             else:
                 return DistributedLengthGroupedSampler(
-                    train_dataset,
-                    self.args.train_batch_size,
+                    dataset,
+                    batch_size,
                     num_replicas=self.args.world_size,
                     rank=self.args.process_index,
                     lengths=lengths,
@@ -375,24 +412,52 @@ class CaoTrainer(Trainer):
         else:
             if self.args.world_size <= 1:
                 if _is_torch_generator_available:
-                    return RandomSampler(train_dataset, generator=generator)
-                return RandomSampler(train_dataset)
+                    return RandomSampler(dataset, generator=generator)
+                return RandomSampler(dataset)
             elif (
                 self.args.parallel_mode in [ParallelMode.TPU, ParallelMode.SAGEMAKER_MODEL_PARALLEL]
                 and not self.args.dataloader_drop_last
             ):
                 # Use a loop for TPUs when drop_last is False to have all batches have the same size.
                 return DistributedSamplerWithLoop(
-                    train_dataset,
-                    batch_size=self.args.per_device_train_batch_size,
+                    dataset,
+                    per_device_batch_size,
                     num_replicas=self.args.world_size,
                     rank=self.args.process_index,
                     seed=self.args.seed,
                 )
             else:
                 return DistributedSampler(
-                    train_dataset,
+                    dataset,
                     num_replicas=self.args.world_size,
                     rank=self.args.process_index,
                     seed=self.args.seed,
                 )
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        """
+        How the loss is computed by Trainer. By default, all models return the loss in the first element.
+
+        Subclass and override for custom behavior.
+        """
+        if self.label_smoother is not None and "labels" in inputs:
+            labels = inputs.pop("labels")
+        else:
+            labels = None
+
+        if self.bert_base.device != model.device:
+            self.bert_base = self.bert_base.to(model.device)
+
+        outputs = model(bert_base=self.bert_base, **inputs)
+        # Save past state if it exists
+        # TODO: this needs to be fixed and made cleaner later.
+        if self.args.past_index >= 0:
+            self._past = outputs[self.args.past_index]
+
+        if labels is not None:
+            loss = self.label_smoother(outputs, labels)
+        else:
+            # We don't use .loss here since the model may return tuples instead of ModelOutput.
+            loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
+
+        return (loss, outputs) if return_outputs else loss

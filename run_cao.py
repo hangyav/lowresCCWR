@@ -41,6 +41,7 @@ from transformers import (
     HfArgumentParser,
     TrainingArguments,
     set_seed,
+    BertModel,
 )
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
@@ -421,7 +422,8 @@ def main():
             revision=model_args.model_revision,
             use_auth_token=True if model_args.use_auth_token else None,
         )
-        model.init_base_model(
+
+        model_base = BertModel.from_pretrained(
             model_args.model_name_or_path,
             from_tf=bool(".ckpt" in model_args.model_name_or_path),
             config=config,
@@ -429,13 +431,16 @@ def main():
             revision=model_args.model_revision,
             use_auth_token=True if model_args.use_auth_token else None,
         )
+        for param in model_base.parameters():
+            param.requires_grad = False
 
     else:
         logger.info("Training new model from scratch")
         model = BertForCaoAlign.from_config(config)
-        model.init_base_model(config=config)
+        model_base = BertModel.from_config(config)
 
     model.resize_token_embeddings(len(tokenizer))
+    model_base.resize_token_embeddings(len(tokenizer))
 
     train_dataset, eval_dataset, data_collator = get_datasets(
         data_args,
@@ -454,6 +459,7 @@ def main():
         eval_dataset=eval_dataset if training_args.do_eval else None,
         tokenizer=tokenizer,
         data_collator=data_collator,
+        bert_base=model_base,
     )
 
     # TODO nothing was changed from this point down compared to the original run_mlm.py
