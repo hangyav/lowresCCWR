@@ -34,7 +34,7 @@ LANGUAGE_PATHS = {
     'de-en': ('europarl-v7.de-en.token.clean', 'europarl-v7.de-en.intersect'),
     'el-en': ('europarl-v7.el-en.token.clean', 'europarl-v7.el-en.intersect'),
     #  'ne-en': ('europarl-v7.ne-en.token.clean', 'europarl-v7.ne-en.intersect'),
-    'ne-en': ('final.data.clean.2.txt' 'final.data.clean.2.intersect'),
+    'ne-en': ('final.data.clean.2.txt', 'final.data.clean.2.intersect'),
 }
 
 # Order of data is TEST, DEV, TRAIN
@@ -256,3 +256,28 @@ class DataCollatorForCaoAlignment:
 
     def _to_list(self, examples, col):
         return [example[col] for example in examples]
+
+
+class MultiDataLoader():
+
+    def __init__(self, datasets):
+        self.datasets = datasets
+        # this is ugly
+        self.dataset = self
+
+    def __len__(self):
+        return sum([len(d.dataset) for d in self.datasets])
+
+    def __iter__(self):
+        iters = [d.__iter__() for d in self.datasets]
+        while True:
+            stopped = set()
+            for it in iters:
+                try:
+                    yield next(it)
+                except StopIteration:
+                    stopped.add(it)
+            for it in stopped:
+                iters.remove(it)
+            if len(iters) == 0:
+                return

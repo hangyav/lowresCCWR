@@ -1,15 +1,37 @@
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Dict, List, Optional, Tuple, Union
+from collections.abc import Sized
 
 import torch
+from torch import nn
 from torch.nn import functional as F
+from torch.utils.data.dataset import Dataset
+from torch.utils.data.dataloader import DataLoader
 
 from transformers import (
     BertPreTrainedModel,
     BertModel,
+    is_datasets_available,
 )
 from transformers.file_utils import ModelOutput
+from transformers.modeling_utils import PreTrainedModel
+from transformers.training_args import TrainingArguments, ParallelMode
+from transformers.data.data_collator import DataCollator
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+from transformers.trainer import Trainer, _is_torch_generator_available
+from transformers.trainer_utils import EvalPrediction
+from transformers.trainer_callback import TrainerCallback
+from transformers.trainer_pt_utils import (
+        IterableDatasetShard,
+        LengthGroupedSampler,
+        DistributedLengthGroupedSampler,
+        RandomSampler,
+        DistributedSampler,
+        DistributedSamplerWithLoop,
+)
+
+from cao_align.cao_data import MultiDataLoader
 
 logger = logging.getLogger(__name__)
 
@@ -226,3 +248,147 @@ class SubwordToTokenStrategyAvg(SubwordToTokenStrategyBase):
     def _process(self, output, features, word_ids_lsts, special_word_masks,
                  include_clssep):
         raise NotImplementedError
+
+
+class CaoTrainer(Trainer):
+
+    def __init__(
+        self,
+        model: Union[PreTrainedModel, nn.Module] = None,
+        args: TrainingArguments = None,
+        data_collator: Optional[DataCollator] = None,
+        train_dataset: Optional[Dataset] = None,
+        eval_dataset: Optional[Dataset] = None,
+        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        model_init: Callable[[], PreTrainedModel] = None,
+        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
+        callbacks: Optional[List[TrainerCallback]] = None,
+        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+    ):
+        super().__init__(
+            model,
+            args,
+            data_collator,
+            train_dataset,
+            eval_dataset,
+            tokenizer,
+            model_init,
+            compute_metrics,
+            callbacks,
+            optimizers
+        )
+
+    def get_train_dataloader(self):
+        """
+        Returns the training :class:`~torch.utils.data.DataLoader`.
+
+        Will use no sampler if :obj:`self.train_dataset` does not implement :obj:`__len__`, a random sampler (adapted
+        to distributed training if necessary) otherwise.
+
+        Subclass and override this method if you want to inject some custom behavior.
+        """
+        datasets = self.train_dataset.values()
+        datasets = [self._get_single_train_dataloader(d) for d in datasets]
+
+        if len(datasets) == 1:
+            return datasets[0]
+
+        return MultiDataLoader(datasets)
+
+    def _get_single_train_dataloader(self, train_dataset) -> DataLoader:
+        if is_datasets_available() and isinstance(train_dataset, Dataset):
+            train_dataset = self._remove_unused_columns(train_dataset, description="training")
+
+        if isinstance(train_dataset, torch.utils.data.dataset.IterableDataset):
+            if self.args.world_size > 1:
+                train_dataset = IterableDatasetShard(
+                    train_dataset,
+                    batch_size=self.args.train_batch_size,
+                    drop_last=self.args.dataloader_drop_last,
+                    num_processes=self.args.world_size,
+                    process_index=self.args.process_index,
+                )
+
+            return DataLoader(
+                train_dataset,
+                batch_size=self.args.train_batch_size,
+                collate_fn=self.data_collator,
+                num_workers=self.args.dataloader_num_workers,
+                pin_memory=self.args.dataloader_pin_memory,
+            )
+
+        train_sampler = self._get_single_train_sampler(train_dataset)
+
+        return DataLoader(
+            train_dataset,
+            batch_size=self.args.train_batch_size,
+            sampler=train_sampler,
+            collate_fn=self.data_collator,
+            drop_last=self.args.dataloader_drop_last,
+            num_workers=self.args.dataloader_num_workers,
+            pin_memory=self.args.dataloader_pin_memory,
+        )
+
+    def _get_single_train_sampler(self, train_dataset) -> Optional[torch.utils.data.sampler.Sampler]:
+        if not isinstance(train_dataset, Sized):
+            return None
+
+        generator = None
+        if self.args.world_size <= 1 and _is_torch_generator_available:
+            generator = torch.Generator()
+            generator.manual_seed(int(torch.empty((), dtype=torch.int64).random_().item()))
+
+        # Build the sampler.
+        if self.args.group_by_length:
+            if is_datasets_available() and isinstance(train_dataset, Dataset):
+                lengths = (
+                    train_dataset[self.args.length_column_name]
+                    if self.args.length_column_name in train_dataset.column_names
+                    else None
+                )
+            else:
+                lengths = None
+            model_input_name = self.tokenizer.model_input_names[0] if self.tokenizer is not None else None
+            if self.args.world_size <= 1:
+                return LengthGroupedSampler(
+                    train_dataset,
+                    self.args.train_batch_size,
+                    lengths=lengths,
+                    model_input_name=model_input_name,
+                    generator=generator,
+                )
+            else:
+                return DistributedLengthGroupedSampler(
+                    train_dataset,
+                    self.args.train_batch_size,
+                    num_replicas=self.args.world_size,
+                    rank=self.args.process_index,
+                    lengths=lengths,
+                    model_input_name=model_input_name,
+                    seed=self.args.seed,
+                )
+
+        else:
+            if self.args.world_size <= 1:
+                if _is_torch_generator_available:
+                    return RandomSampler(train_dataset, generator=generator)
+                return RandomSampler(train_dataset)
+            elif (
+                self.args.parallel_mode in [ParallelMode.TPU, ParallelMode.SAGEMAKER_MODEL_PARALLEL]
+                and not self.args.dataloader_drop_last
+            ):
+                # Use a loop for TPUs when drop_last is False to have all batches have the same size.
+                return DistributedSamplerWithLoop(
+                    train_dataset,
+                    batch_size=self.args.per_device_train_batch_size,
+                    num_replicas=self.args.world_size,
+                    rank=self.args.process_index,
+                    seed=self.args.seed,
+                )
+            else:
+                return DistributedSampler(
+                    train_dataset,
+                    num_replicas=self.args.world_size,
+                    rank=self.args.process_index,
+                    seed=self.args.seed,
+                )

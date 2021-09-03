@@ -50,7 +50,7 @@ from transformers.utils.versions import require_version
 
 from cao_align.cao_data import MAX_SENTENCE_LENGTH, DataCollatorForCaoAlignment
 from cao_align.cao_model import BertForCaoAlign
-
+from cao_align.cao_model import CaoTrainer
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.9.0")
@@ -240,6 +240,84 @@ def tokenize_function(tokenizer, examples):
     }
 
 
+def get_datasets(data_args, model_args, training_args, tokenizer, model):
+    # Downloading and loading a dataset
+    #  raw_datasets = load_dataset(
+    #      data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir
+    #  )
+    config_names = data_args.dataset_config_name.split(',')
+    load_train = 'train'
+    load_validation = 'validation'
+    load_test = 'test'
+    if data_args.max_train_samples is not None:
+        load_train = f'train[:{data_args.max_train_samples}]'
+    if data_args.max_eval_samples is not None:
+        load_train = f'validation[:{data_args.max_eval_samples}]'
+
+    raw_datasets = {
+        config_name: load_dataset(
+            data_args.dataset_name,
+            config_name,
+            cache_dir=model_args.cache_dir,
+            split={
+                'train': load_train,
+                'validation': load_validation,
+                'test': load_test,
+            },
+        )
+        for config_name in config_names
+    }
+
+    # Preprocessing the datasets.
+    # First we tokenize all the texts.
+    if training_args.do_train:
+        column_names = raw_datasets[config_names[0]]["train"].column_names
+    else:
+        column_names = raw_datasets[config_names[0]]["validation"].column_names
+
+    if data_args.max_seq_length is None:
+        max_seq_length = tokenizer.model_max_length
+        if max_seq_length > 1024:
+            logger.warning(
+                f"The tokenizer picked seems to have a very large `model_max_length` ({tokenizer.model_max_length}). "
+                "Picking 1024 instead. You can change that default value by passing --max_seq_length xxx."
+            )
+            max_seq_length = 1024
+    else:
+        if data_args.max_seq_length > tokenizer.model_max_length:
+            logger.warning(
+                f"The max_seq_length passed ({data_args.max_seq_length}) is larger than the maximum length for the"
+                f"model ({tokenizer.model_max_length}). Using max_seq_length={tokenizer.model_max_length}."
+            )
+        max_seq_length = min(data_args.max_seq_length, tokenizer.model_max_length)
+
+    # Tokenizing data
+    with training_args.main_process_first(desc="dataset map tokenization"):
+        tokenized_datasets = {
+            k: v.map(
+                partial(tokenize_function, tokenizer),
+                batched=True,
+                num_proc=data_args.preprocessing_num_workers,
+                remove_columns=column_names,
+                load_from_cache_file=not data_args.overwrite_cache,
+                desc="Running tokenizer on every text in dataset",
+            )
+            for k, v in raw_datasets.items()
+    }
+
+    train_dataset = {v: k["train"] for v, k in tokenized_datasets.items()}
+    eval_dataset = {v: k["validation"] for v, k in tokenized_datasets.items()}
+
+    # Data collator
+    # This one will take care converting lists to tensors
+    data_collator = DataCollatorForCaoAlignment(
+        tokenizer=tokenizer,
+        max_length=model.bert.embeddings.position_embeddings.num_embeddings,
+    )
+
+    return train_dataset, eval_dataset, data_collator
+
+
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
@@ -292,28 +370,6 @@ def main():
 
     # Set seed before initializing model.
     set_seed(training_args.seed)
-
-    # Downloading and loading a dataset
-    #  raw_datasets = load_dataset(
-    #      data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir
-    #  )
-    load_train = 'train'
-    load_validation = 'validation'
-    load_test = 'test'
-    if data_args.max_train_samples is not None:
-        load_train = f'train[:{data_args.max_train_samples}]'
-    if data_args.max_eval_samples is not None:
-        load_train = f'validation[:{data_args.max_eval_samples}]'
-    raw_datasets = load_dataset(
-        data_args.dataset_name,
-        data_args.dataset_config_name,
-        cache_dir=model_args.cache_dir,
-        split={
-            'train': load_train,
-            'validation': load_validation,
-            'test': load_test,
-        },
-    )
 
     # Load pretrained model and tokenizer
     #
@@ -377,63 +433,17 @@ def main():
 
     model.resize_token_embeddings(len(tokenizer))
 
-    # Preprocessing the datasets.
-    # First we tokenize all the texts.
-    if training_args.do_train:
-        column_names = raw_datasets["train"].column_names
-    else:
-        column_names = raw_datasets["validation"].column_names
-
-    if data_args.max_seq_length is None:
-        max_seq_length = tokenizer.model_max_length
-        if max_seq_length > 1024:
-            logger.warning(
-                f"The tokenizer picked seems to have a very large `model_max_length` ({tokenizer.model_max_length}). "
-                "Picking 1024 instead. You can change that default value by passing --max_seq_length xxx."
-            )
-            max_seq_length = 1024
-    else:
-        if data_args.max_seq_length > tokenizer.model_max_length:
-            logger.warning(
-                f"The max_seq_length passed ({data_args.max_seq_length}) is larger than the maximum length for the"
-                f"model ({tokenizer.model_max_length}). Using max_seq_length={tokenizer.model_max_length}."
-            )
-        max_seq_length = min(data_args.max_seq_length, tokenizer.model_max_length)
-
-    # Tokenizing data
-    with training_args.main_process_first(desc="dataset map tokenization"):
-        tokenized_datasets = raw_datasets.map(
-            partial(tokenize_function, tokenizer),
-            batched=True,
-            num_proc=data_args.preprocessing_num_workers,
-            remove_columns=column_names,
-            load_from_cache_file=not data_args.overwrite_cache,
-            desc="Running tokenizer on every text in dataset",
-        )
-
-    if training_args.do_train:
-        if "train" not in tokenized_datasets:
-            raise ValueError("--do_train requires a train dataset")
-        train_dataset = tokenized_datasets["train"]
-        #  if data_args.max_train_samples is not None:
-        #      train_dataset = train_dataset.select(range(data_args.max_train_samples))
-
-    if training_args.do_eval:
-        if "validation" not in tokenized_datasets:
-            raise ValueError("--do_eval requires a validation dataset")
-        eval_dataset = tokenized_datasets["validation"]
-        #  if data_args.max_eval_samples is not None:
-        #      eval_dataset = eval_dataset.select(range(data_args.max_eval_samples))
-
-    # Data collator
-    # This one will take care converting lists to tensors
-    data_collator = DataCollatorForCaoAlignment(
-        tokenizer=tokenizer,
-        max_length=model.bert.embeddings.position_embeddings.num_embeddings,
+    train_dataset, eval_dataset, data_collator = get_datasets(
+        data_args,
+        model_args,
+        training_args,
+        tokenizer,
+        model,
     )
 
     # Initialize our Trainer
-    trainer = Trainer(
+    #  trainer = Trainer(
+    trainer = CaoTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
