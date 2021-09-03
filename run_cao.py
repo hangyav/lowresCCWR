@@ -330,6 +330,11 @@ def main():
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
+    if data_args.max_train_samples == -1:
+        data_args.max_train_samples = None
+    if data_args.max_eval_samples == -1:
+        data_args.max_eval_samples = None
+
     # Setup logging
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
