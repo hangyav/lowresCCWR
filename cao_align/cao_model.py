@@ -31,7 +31,7 @@ from transformers.trainer_pt_utils import (
         DistributedSamplerWithLoop,
 )
 
-from cao_align.cao_data import MultiDataLoader
+from cao_align.utils import MultiDataLoader
 
 logger = logging.getLogger(__name__)
 
@@ -287,13 +287,17 @@ class CaoTrainer(Trainer):
 
         Subclass and override this method if you want to inject some custom behavior.
         """
-        datasets = self.train_dataset.values()
-        datasets = [self._get_single_train_dataloader(d) for d in datasets]
+        datasets = self.train_dataset.datasets.values()
+        data_loaders = [self._get_single_train_dataloader(d) for d in datasets]
 
-        if len(datasets) == 1:
-            return datasets[0]
+        if len(data_loaders) == 1:
+            return data_loaders[0]
 
-        return MultiDataLoader(datasets)
+        return MultiDataLoader(
+                self.train_dataset,
+                data_loaders,
+                self.args.train_batch_size,
+        )
 
     def _get_single_train_dataloader(self, train_dataset) -> DataLoader:
         if is_datasets_available() and isinstance(train_dataset, Dataset):

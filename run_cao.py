@@ -37,10 +37,8 @@ from transformers import (
     CONFIG_MAPPING,
     MODEL_FOR_MASKED_LM_MAPPING,
     AutoConfig,
-    AutoModelForMaskedLM,
     AutoTokenizer,
     HfArgumentParser,
-    Trainer,
     TrainingArguments,
     set_seed,
 )
@@ -48,7 +46,8 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-from cao_align.cao_data import MAX_SENTENCE_LENGTH, DataCollatorForCaoAlignment
+from cao_align.cao_data import MAX_SENTENCE_LENGTH
+from cao_align.utils import DataCollatorForCaoAlignment, MultiDataset
 from cao_align.cao_model import BertForCaoAlign
 from cao_align.cao_model import CaoTrainer
 
@@ -305,8 +304,8 @@ def get_datasets(data_args, model_args, training_args, tokenizer, model):
             for k, v in raw_datasets.items()
     }
 
-    train_dataset = {v: k["train"] for v, k in tokenized_datasets.items()}
-    eval_dataset = {v: k["validation"] for v, k in tokenized_datasets.items()}
+    train_dataset = MultiDataset({v: k["train"] for v, k in tokenized_datasets.items()})
+    eval_dataset = MultiDataset({v: k["validation"] for v, k in tokenized_datasets.items()})
 
     # Data collator
     # This one will take care converting lists to tensors
