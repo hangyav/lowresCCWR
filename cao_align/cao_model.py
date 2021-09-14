@@ -449,6 +449,19 @@ class CaoTrainer(Trainer):
             self.bert_base = self.bert_base.to(model.device)
 
         outputs = model(bert_base=self.bert_base, **inputs)
+
+        if self.args.detailed_logging and self.state.global_step % self.args.logging_steps == 0:
+            self.control = self.callback_handler.on_log(
+                    self.args,
+                    self.state,
+                    self.control,
+                    {
+                        'joint_loss': outputs['loss'].item(),
+                        'alignment_loss': outputs['alignment_loss'].item(),
+                        'regularization_loss': outputs['regularization_loss'].item(),
+                    }
+            )
+
         # Save past state if it exists
         # TODO: this needs to be fixed and made cleaner later.
         if self.args.past_index >= 0:

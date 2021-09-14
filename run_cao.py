@@ -179,6 +179,16 @@ class DataTrainingArguments:
     )
 
 
+@dataclass
+class MyTrainingArguments(TrainingArguments):
+    detailed_logging: bool = field(
+        default=False,
+        metadata={
+            "help": "Detailed logging."
+        },
+    )
+
+
 def tokenize_function_per_input(tokenizer, examples):
     # this contains the subword token ids
     input_ids_lst = list()
@@ -323,7 +333,7 @@ def main():
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, MyTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
@@ -431,8 +441,6 @@ def main():
             revision=model_args.model_revision,
             use_auth_token=True if model_args.use_auth_token else None,
         )
-        for param in model_base.parameters():
-            param.requires_grad = False
 
     else:
         logger.info("Training new model from scratch")
@@ -441,6 +449,8 @@ def main():
 
     model.resize_token_embeddings(len(tokenizer))
     model_base.resize_token_embeddings(len(tokenizer))
+    for param in model_base.parameters():
+        param.requires_grad = False
 
     train_dataset, eval_dataset, data_collator = get_datasets(
         data_args,
@@ -462,7 +472,6 @@ def main():
         bert_base=model_base,
     )
 
-    # TODO nothing was changed from this point down compared to the original run_mlm.py
     # Training
     if training_args.do_train:
         checkpoint = None
@@ -483,6 +492,9 @@ def main():
         trainer.save_metrics("train", metrics)
         trainer.save_state()
 
+    model.save_pretrained(training_args.output_dir)
+    tokenizer.save_pretrained(training_args.output_dir)
+
     # Evaluation
     if training_args.do_eval:
         logger.info("*** Evaluate ***")
@@ -491,11 +503,6 @@ def main():
 
         max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
         metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
-        try:
-            perplexity = math.exp(metrics["eval_loss"])
-        except OverflowError:
-            perplexity = float("inf")
-        metrics["perplexity"] = perplexity
 
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
