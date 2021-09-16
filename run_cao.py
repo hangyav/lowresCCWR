@@ -129,7 +129,7 @@ class DataTrainingArguments:
         default='./cao_align/cao_data.py', metadata={"help": "The name of the dataset to use (via the datasets library)."}
     )
     dataset_config_name: Optional[str] = field(
-        default=None, metadata={"help": "The configuration name of the dataset to use (via the datasets library)."}
+        default="es-en,bg-en,fr-en,de-en,el-en,ne-en", metadata={"help": "The configuration name of the dataset to use (via the datasets library)."}
     )
     #  train_file: Optional[str] = field(default=None, metadata={"help": "The input training data file (a text file)."})
     #  validation_file: Optional[str] = field(
