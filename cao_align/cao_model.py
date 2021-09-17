@@ -90,7 +90,7 @@ class BertForCaoAlign(BertPreTrainedModel):
                 bert_base,
         )
 
-        src_idxs, trg_idxs = self._get_ligned_indices(
+        src_idxs, trg_idxs = BertForCaoAlign.get_ligned_indices(
                 alignment,
                 include_clssep,
                 src_special_word_masks,
@@ -98,6 +98,8 @@ class BertForCaoAlign(BertPreTrainedModel):
                 src_word_ids_lst,
                 trg_word_ids_lst,
         )
+        src_idxs = src_idxs.to(self.device)
+        trg_idxs = trg_idxs.to(self.device)
 
         alignment_loss = F.mse_loss(
                 src_features[src_idxs[:, 0], src_idxs[:, 1]],
@@ -135,11 +137,12 @@ class BertForCaoAlign(BertPreTrainedModel):
 
         return features
 
-    def _get_ligned_indices(self, alignment_lsts, include_clssep,
-                            src_special_word_masks=None,
-                            trg_special_word_masks=None,
-                            src_word_ids_lst=None,
-                            trg_word_ids_lst=None):
+    @staticmethod
+    def get_ligned_indices(alignment_lsts, include_clssep,
+                           src_special_word_masks=None,
+                           trg_special_word_masks=None,
+                           src_word_ids_lst=None,
+                           trg_word_ids_lst=None):
         assert not include_clssep or \
             (
                 src_special_word_masks is not None and
@@ -177,8 +180,8 @@ class BertForCaoAlign(BertPreTrainedModel):
                 src_res.append([i, src_idx])
                 trg_res.append([i, trg_idx])
 
-        src_res = torch.tensor(src_res, dtype=int).to(self.device)
-        trg_res = torch.tensor(trg_res, dtype=int).to(self.device)
+        src_res = torch.tensor(src_res, dtype=int)
+        trg_res = torch.tensor(trg_res, dtype=int)
 
         return src_res, trg_res
 

@@ -94,3 +94,60 @@ def test_SubwordToTokenStrategyLast(features, word_ids_lsts,
                               include_clssep)
 
     assert output.tolist() == expected.tolist()
+
+
+@pytest.mark.parametrize('alignment,src_special_word_masks,'
+                         'trg_special_word_masks,src_word_ids_lst,'
+                         'trg_word_ids_lst,expected', [
+                             (
+                                 [
+                                     [(0, 0), (1, 2), (2, 1), (4, 3)],
+                                 ],
+                                 torch.tensor([
+                                     [1, 0, 0, 0, 0, 0, 1],
+                                 ]),
+                                 torch.tensor([
+                                     [1, 0, 0, 0, 0, 1],
+                                 ]),
+                                 torch.tensor([
+                                     [[0], [1], [2], [3], [4], [5], [6]],
+                                 ]),
+                                 torch.tensor([
+                                     [[0], [1], [2], [3], [4], [5]],
+                                 ]),
+                                 (
+                                     torch.tensor([
+                                         [0, 1],
+                                         [0, 2],
+                                         [0, 3],
+                                         [0, 5],
+                                         # [CLS] and [SEP] at the end of list of
+                                         # sample i
+                                         [0, 0],
+                                         [0, 6],
+                                     ]),
+                                     torch.tensor([
+                                         [0, 1],
+                                         [0, 3],
+                                         [0, 2],
+                                         [0, 4],
+                                         [0, 0],
+                                         [0, 5],
+                                     ]),
+                                 ),
+                             ),
+                         ])
+def test_word_alignment(alignment, src_special_word_masks,
+                        trg_special_word_masks, src_word_ids_lst,
+                        trg_word_ids_lst, expected):
+    output = cm.BertForCaoAlign.get_ligned_indices(
+        alignment,
+        True,
+        src_special_word_masks,
+        trg_special_word_masks,
+        src_word_ids_lst,
+        trg_word_ids_lst
+    )
+
+    assert output[0].tolist() == expected[0].tolist()
+    assert output[1].tolist() == expected[1].tolist()
