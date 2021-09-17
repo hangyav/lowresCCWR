@@ -10,6 +10,7 @@ class DataCollatorForCaoAlignment:
 
     tokenizer: PreTrainedTokenizerBase
     max_length: int
+    include_clssep: bool
 
     def __call__(self, examples) -> Dict[str, torch.Tensor]:
         max_src_len = max([len(item['src_input_ids']) for item in examples])
@@ -46,6 +47,15 @@ class DataCollatorForCaoAlignment:
         trg_word_ids_lst = self._to_list(examples, 'trg_word_ids_lst')
         alignment = self._to_list(examples, 'alignment')
 
+        src_idxs, trg_idxs = DataCollatorForCaoAlignment.get_aligned_indices(
+                alignment,
+                self.include_clssep,
+                src_special_word_masks,
+                trg_special_word_masks,
+                src_word_ids_lst,
+                trg_word_ids_lst,
+        )
+
         return {
             'src_input_ids': src_input_ids,
             'trg_input_ids': trg_input_ids,
@@ -55,7 +65,8 @@ class DataCollatorForCaoAlignment:
             'trg_word_ids_lst': trg_word_ids_lst,
             'src_special_word_masks': src_special_word_masks,
             'trg_special_word_masks': trg_special_word_masks,
-            'alignment': alignment,
+            'src_alignments': src_idxs,
+            'trg_alignments': trg_idxs,
         }
 
     def _handle_input_ids(self, examples, col, max_len, default_value):
@@ -77,6 +88,61 @@ class DataCollatorForCaoAlignment:
 
     def _to_list(self, examples, col):
         return [example[col] for example in examples]
+
+    @staticmethod
+    def get_aligned_indices(alignment_lsts, include_clssep,
+                            src_special_word_masks=None,
+                            trg_special_word_masks=None,
+                            src_word_ids_lst=None,
+                            trg_word_ids_lst=None):
+        assert not include_clssep or \
+            (
+                src_special_word_masks is not None and
+                trg_special_word_masks is not None and
+                src_word_ids_lst is not None and
+                trg_word_ids_lst is not None
+            )
+
+        src_res = list()
+        trg_res = list()
+        offset = 0
+        if include_clssep:
+            # +1 because of added [CLS]
+            offset = 1
+
+        for i, alignment_lst in enumerate(alignment_lsts):
+            for alignment in alignment_lst:
+                src_res.append([i, alignment[0] + offset])
+                trg_res.append([i, alignment[1] + offset])
+
+            if include_clssep:
+                # [CLS]
+                src_res.append([i, 0])
+                trg_res.append([i, 0])
+                # [SEP]
+                src_idx = DataCollatorForCaoAlignment.get_word_idx_of_subword(
+                    (src_special_word_masks[i] == 1).nonzero()[1],
+                    src_word_ids_lst[i]
+                )
+                trg_idx = DataCollatorForCaoAlignment.get_word_idx_of_subword(
+                    (trg_special_word_masks[i] == 1).nonzero()[1],
+                    trg_word_ids_lst[i]
+                )
+
+                src_res.append([i, src_idx])
+                trg_res.append([i, trg_idx])
+
+        src_res = torch.tensor(src_res, dtype=int)
+        trg_res = torch.tensor(trg_res, dtype=int)
+
+        return src_res, trg_res
+
+    @staticmethod
+    def get_word_idx_of_subword(position, word_ids_lst):
+        for i, lst in enumerate(word_ids_lst):
+            if position in lst:
+                return i
+        return -1
 
 
 class MultiDataset(Sized):

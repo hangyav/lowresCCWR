@@ -153,7 +153,7 @@ def test_SubwordToTokenStrategyLast(features, word_ids_lsts,
 def test_word_alignment(alignment, src_special_word_masks,
                         trg_special_word_masks, src_word_ids_lst,
                         trg_word_ids_lst, expected):
-    output = cm.BertForCaoAlign.get_ligned_indices(
+    output = cu.DataCollatorForCaoAlignment.get_aligned_indices(
         alignment,
         True,
         src_special_word_masks,
@@ -242,6 +242,7 @@ def test_pipeline(examples, expected, equals,
     collator = cu.DataCollatorForCaoAlignment(
         tokenizer=tokenizer_bert_multilingual_cased,
         max_length=align_bert.bert.embeddings.position_embeddings.num_embeddings,
+        include_clssep=True,
     )
     dataset = Dataset.from_dict(examples)
     dataset = dataset.map(
@@ -254,9 +255,7 @@ def test_pipeline(examples, expected, equals,
     )
     batch = collator(dataset)
 
-    print(batch)
     output = align_bert(return_dict=True, bert_base=bert_base, **batch)
-    print(output)
 
     if equals['alignment_equals']:
         assert output['alignment_loss'].item() == expected['alignment_loss']

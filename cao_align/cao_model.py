@@ -57,7 +57,8 @@ class BertForCaoAlign(BertPreTrainedModel):
         trg_special_word_masks,
         src_attention_masks,
         trg_attention_masks,
-        alignment,
+        src_alignments,
+        trg_alignments,
         include_clssep=True,
         return_dict=None,
         bert_base=None,
@@ -90,20 +91,9 @@ class BertForCaoAlign(BertPreTrainedModel):
                 bert_base,
         )
 
-        src_idxs, trg_idxs = BertForCaoAlign.get_ligned_indices(
-                alignment,
-                include_clssep,
-                src_special_word_masks,
-                trg_special_word_masks,
-                src_word_ids_lst,
-                trg_word_ids_lst,
-        )
-        src_idxs = src_idxs.to(self.device)
-        trg_idxs = trg_idxs.to(self.device)
-
         alignment_loss = F.mse_loss(
-                src_features[src_idxs[:, 0], src_idxs[:, 1]],
-                trg_features[trg_idxs[:, 0], trg_idxs[:, 1]]
+                src_features[src_alignments[:, 0], src_alignments[:, 1]],
+                trg_features[trg_alignments[:, 0], trg_alignments[:, 1]]
         )
         regularization_loss = F.mse_loss(
             trg_features.reshape(-1, trg_features.shape[-1]),
@@ -136,61 +126,6 @@ class BertForCaoAlign(BertPreTrainedModel):
         )
 
         return features
-
-    @staticmethod
-    def get_ligned_indices(alignment_lsts, include_clssep,
-                           src_special_word_masks=None,
-                           trg_special_word_masks=None,
-                           src_word_ids_lst=None,
-                           trg_word_ids_lst=None):
-        assert not include_clssep or \
-            (
-                src_special_word_masks is not None and
-                trg_special_word_masks is not None and
-                src_word_ids_lst is not None and
-                trg_word_ids_lst is not None
-            )
-
-        src_res = list()
-        trg_res = list()
-        offset = 0
-        if include_clssep:
-            # +1 because of added [CLS]
-            offset = 1
-
-        for i, alignment_lst in enumerate(alignment_lsts):
-            for alignment in alignment_lst:
-                src_res.append([i, alignment[0] + offset])
-                trg_res.append([i, alignment[1] + offset])
-
-            if include_clssep:
-                # [CLS]
-                src_res.append([i, 0])
-                trg_res.append([i, 0])
-                # [SEP]
-                src_idx = get_word_idx_of_subword(
-                    (src_special_word_masks[i] == 1).nonzero()[1],
-                    src_word_ids_lst[i]
-                )
-                trg_idx = get_word_idx_of_subword(
-                    (trg_special_word_masks[i] == 1).nonzero()[1],
-                    trg_word_ids_lst[i]
-                )
-
-                src_res.append([i, src_idx])
-                trg_res.append([i, trg_idx])
-
-        src_res = torch.tensor(src_res, dtype=int)
-        trg_res = torch.tensor(trg_res, dtype=int)
-
-        return src_res, trg_res
-
-
-def get_word_idx_of_subword(position, word_ids_lst):
-    for i, lst in enumerate(word_ids_lst):
-        if position in lst:
-            return i
-    return -1
 
 
 @dataclass
@@ -285,6 +220,7 @@ class CaoTrainer(Trainer):
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         bert_base: PreTrainedModel = None,
+        include_clssep: Optional[bool] = True,
     ):
         super().__init__(
             model,
@@ -301,6 +237,7 @@ class CaoTrainer(Trainer):
         self.bert_base = bert_base
         for param in self.bert_base.parameters():
             assert not param.requires_grad
+        self.include_clssep = include_clssep
 
     def get_train_dataloader(self):
         """
@@ -478,7 +415,8 @@ class CaoTrainer(Trainer):
         if self.bert_base.device != model.device:
             self.bert_base = self.bert_base.to(model.device)
 
-        outputs = model(bert_base=self.bert_base, **inputs)
+        outputs = model(bert_base=self.bert_base,
+                        include_clssep=self.include_clssep, **inputs)
 
         if self.args.detailed_logging and self.state.global_step % self.args.logging_steps == 0:
             self.control = self.callback_handler.on_log(

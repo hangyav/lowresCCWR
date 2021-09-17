@@ -111,6 +111,10 @@ class ModelArguments:
             "with private models)."
         },
     )
+    include_clssep: bool = field(
+        default=True,
+        metadata={"help": "Use [CLS] and [SEP] in the alignment"},
+    )
 
     def __post_init__(self):
         if self.config_overrides is not None and (self.config_name is not None or self.model_name_or_path is not None):
@@ -323,6 +327,7 @@ def get_datasets(data_args, model_args, training_args, tokenizer, model):
     data_collator = DataCollatorForCaoAlignment(
         tokenizer=tokenizer,
         max_length=model.bert.embeddings.position_embeddings.num_embeddings,
+        include_clssep=model_args.include_clssep,
     )
 
     return train_dataset, eval_dataset, data_collator
@@ -470,6 +475,7 @@ def main():
         tokenizer=tokenizer,
         data_collator=data_collator,
         bert_base=model_base,
+        include_clssep=model_args.include_clssep,
     )
 
     # Training
