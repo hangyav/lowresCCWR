@@ -218,7 +218,7 @@ class SubwordToTokenStrategyBase():
                 for lst in lsts:
                     tmp_tmp_lst = list()
                     for idx, mask in zip(lst, masks[pos:pos+len(lst)]):
-                        if mask == 0:
+                        if mask.item() == 0:
                             tmp_tmp_lst.append(idx)
 
                     if len(tmp_tmp_lst) > 0:
@@ -254,8 +254,8 @@ class SubwordToTokenStrategyLast(SubwordToTokenStrategyBase):
             for id_lst in word_ids_lst:
                 length = len(id_lst)
                 masks = special_word_mask[pos:pos+length]
-                if (include_clssep and masks[-1] in {0, 1}) \
-                        or (not include_clssep and masks[-1] == 0):
+                if (include_clssep and masks[-1].item() in {0, 1}) \
+                        or (not include_clssep and masks[-1].item() == 0):
                     ids.append(id_lst[-1])
 
                 pos += length

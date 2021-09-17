@@ -1,13 +1,26 @@
 import pytest
 import torch
+from functools import partial
 import run_cao as rc
 from cao_align import cao_model as cm
-from transformers import AutoTokenizer
+from cao_align import utils as cu
+from transformers import AutoTokenizer, BertModel
+from datasets import Dataset
 
 
 @pytest.fixture
 def tokenizer_bert_multilingual_cased():
     return AutoTokenizer.from_pretrained('bert-base-multilingual-cased')
+
+
+@pytest.fixture
+def bert_base():
+    return BertModel.from_pretrained('bert-base-multilingual-cased')
+
+
+@pytest.fixture
+def align_bert():
+    return cm.BertForCaoAlign.from_pretrained('bert-base-multilingual-cased')
 
 
 @pytest.mark.parametrize('examples,expected', [
@@ -56,10 +69,10 @@ def test_tokenize_function_per_input(examples, expected,
             [[0], [1], [2]],
             [[0], [1, 2], [3, 4], [5]],
         ],
-        [
+        torch.tensor([
             [1, 0, 1, 2, 2, 2],
             [1, 0, 0, 0, 0, 1],
-        ],
+        ]),
         True,
         torch.tensor([
             [[0.0]*5, [1.0]*5, [2.0]*5, [0.0]*5],
@@ -75,10 +88,10 @@ def test_tokenize_function_per_input(examples, expected,
             [[0], [1], [2]],
             [[0], [1, 2], [3, 4], [5]],
         ],
-        [
+        torch.tensor([
             [1, 0, 1, 2, 2, 2],
             [1, 0, 0, 0, 0, 1],
-        ],
+        ]),
         False,
         torch.tensor([
             [[1.0]*5, [0.0]*5],
@@ -151,3 +164,111 @@ def test_word_alignment(alignment, src_special_word_masks,
 
     assert output[0].tolist() == expected[0].tolist()
     assert output[1].tolist() == expected[1].tolist()
+
+
+@pytest.mark.parametrize('examples,expected,equals', [
+    (
+        {
+            'source': [
+                'I like beer .',
+            ],
+            'target': [
+                'I like beer .',
+            ],
+            'alignment': [
+                [(0, 0), (1, 1), (2, 2), (3, 3)],
+            ],
+        },
+        {
+            'alignment_loss': 0.0,
+            'regularization_loss': 0.0,
+            'loss': 0.0,
+        },
+        {
+            'alignment_equals': True,
+            'regularization_equals': True,
+            'equals': True,
+        },
+    ),
+    (
+        {
+            'source': [
+                'I like beer .',
+            ],
+            'target': [
+                'I like beer .',
+            ],
+            'alignment': [
+                [(0, 0), (1, 2), (2, 1), (3, 3)],
+            ],
+        },
+        {
+            'alignment_loss': 0.0,
+            'regularization_loss': 0.0,
+            'loss': 0.0,
+        },
+        {
+            'alignment_equals': False,
+            'regularization_equals': True,
+            'equals': False,
+        },
+    ),
+    (
+        {
+            'source': [
+                'I like beer .',
+            ],
+            'target': [
+                'Ich mag Bier .',
+            ],
+            'alignment': [
+                [(0, 0), (1, 1), (2, 2), (3, 3)],
+            ],
+        },
+        {
+            'alignment_loss': 0.0,
+            'regularization_loss': 0.0,
+            'loss': 0.0,
+        },
+        {
+            'alignment_equals': False,
+            'regularization_equals': True,
+            'equals': False,
+        },
+    ),
+])
+def test_pipeline(examples, expected, equals,
+                  bert_base, align_bert, tokenizer_bert_multilingual_cased):
+    collator = cu.DataCollatorForCaoAlignment(
+        tokenizer=tokenizer_bert_multilingual_cased,
+        max_length=align_bert.bert.embeddings.position_embeddings.num_embeddings,
+    )
+    dataset = Dataset.from_dict(examples)
+    dataset = dataset.map(
+        partial(rc.tokenize_function, tokenizer_bert_multilingual_cased),
+        batched=True,
+        num_proc=1,
+        remove_columns=dataset.column_names,
+        load_from_cache_file=False,
+        desc="Running tokenizer on every text in dataset",
+    )
+    batch = collator(dataset)
+
+    print(batch)
+    output = align_bert(return_dict=True, bert_base=bert_base, **batch)
+    print(output)
+
+    if equals['alignment_equals']:
+        assert output['alignment_loss'].item() == expected['alignment_loss']
+    else:
+        assert output['alignment_loss'].item() != expected['alignment_loss']
+
+    if equals['regularization_equals']:
+        assert output['regularization_loss'].item() == expected['regularization_loss']
+    else:
+        assert output['regularization_loss'].item() != expected['regularization_loss']
+
+    if equals['equals']:
+        assert output['loss'].item() == expected['loss']
+    else:
+        assert output['loss'].item() != expected['loss']
