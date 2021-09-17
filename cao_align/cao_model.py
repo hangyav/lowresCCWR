@@ -205,11 +205,32 @@ class SubwordToTokenStrategyBase():
 
     def process(self, features, word_ids_lsts, special_word_masks,
                 include_clssep):
-        length = max([len(lst) for lst in word_ids_lsts])
+        filtered_word_ids_lsts = list()
+        if include_clssep:
+            filtered_word_ids_lsts = word_ids_lsts
+        else:
+            for lsts, masks in zip(word_ids_lsts, special_word_masks):
+                pos = 0
+                tmp_lst = list()
+                for lst in lsts:
+                    tmp_tmp_lst = list()
+                    for idx, mask in zip(lst, masks[pos:pos+len(lst)]):
+                        if mask == 0:
+                            tmp_tmp_lst.append(idx)
+
+                    if len(tmp_tmp_lst) > 0:
+                        tmp_lst.append(tmp_tmp_lst)
+                    pos += len(lst)
+
+                filtered_word_ids_lsts.append(tmp_lst)
+
+        length = max([len(lst) for lst in filtered_word_ids_lsts])
+
         res = torch.zeros(
                 (features.shape[0], length, features.shape[2]),
                 dtype=features.dtype
         )
+
         self._process(res, features, word_ids_lsts, special_word_masks,
                       include_clssep)
         return res
@@ -225,11 +246,17 @@ class SubwordToTokenStrategyLast(SubwordToTokenStrategyBase):
                  include_clssep):
         for i, (feature, word_ids_lst, special_word_mask) \
                 in enumerate(zip(features, word_ids_lsts, special_word_masks)):
-            ids = [
-                    id_lst[-1]
-                    for id_lst, mask in zip(word_ids_lst, special_word_mask)
-                    if (include_clssep and (mask == 1 or mask == 0)) or (not include_clssep and mask == 0)
-            ]
+            ids = list()
+            pos = 0
+            for id_lst in word_ids_lst:
+                length = len(id_lst)
+                masks = special_word_mask[pos:pos+length]
+                if (include_clssep and masks[-1] in {0, 1}) \
+                        or (not include_clssep and masks[-1] == 0):
+                    ids.append(id_lst[-1])
+
+                pos += length
+
             output[i, :len(ids)] = features[i, ids]
 
 
