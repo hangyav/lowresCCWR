@@ -191,6 +191,7 @@ class MyTrainingArguments(TrainingArguments):
             "help": "Detailed logging."
         },
     )
+    do_test: bool = field(default=False, metadata={"help": "Whether to run eval on the test set."})
 
 
 def tokenize_function_per_input(tokenizer, examples):
@@ -321,6 +322,7 @@ def get_datasets(data_args, model_args, training_args, tokenizer, model):
 
     train_dataset = MultiDataset({v: k["train"] for v, k in tokenized_datasets.items()})
     eval_dataset = MultiDataset({v: k["validation"] for v, k in tokenized_datasets.items()})
+    test_dataset = MultiDataset({v: k["test"] for v, k in tokenized_datasets.items()})
 
     # Data collator
     # This one will take care converting lists to tensors
@@ -330,7 +332,7 @@ def get_datasets(data_args, model_args, training_args, tokenizer, model):
         include_clssep=model_args.include_clssep,
     )
 
-    return train_dataset, eval_dataset, data_collator
+    return train_dataset, eval_dataset, test_dataset, data_collator
 
 
 def main():
@@ -350,6 +352,10 @@ def main():
         data_args.max_train_samples = None
     if data_args.max_eval_samples == -1:
         data_args.max_eval_samples = None
+
+    assert training_args.per_device_eval_batch_size == 256, 'Currently only' \
+        + ' size of 512 is supported doe to sone incorrect indexing caused by'\
+        + ' _batch_eval_data function in cao_model.py'
 
     # Setup logging
     logging.basicConfig(
@@ -457,7 +463,7 @@ def main():
     for param in model_base.parameters():
         param.requires_grad = False
 
-    train_dataset, eval_dataset, data_collator = get_datasets(
+    train_dataset, eval_dataset, test_dataset, data_collator = get_datasets(
         data_args,
         model_args,
         training_args,
@@ -498,12 +504,9 @@ def main():
         trainer.save_metrics("train", metrics)
         trainer.save_state()
 
-    model.save_pretrained(training_args.output_dir)
-    tokenizer.save_pretrained(training_args.output_dir)
-
     # Evaluation
     if training_args.do_eval:
-        logger.info("*** Evaluate ***")
+        logger.info("*** Validation ***")
 
         metrics = trainer.evaluate()
 
@@ -512,6 +515,18 @@ def main():
 
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
+
+    # Test
+    if training_args.do_test:
+        logger.info("*** Testing ***")
+
+        metrics = trainer.evaluate(test_dataset)
+
+        max_test_samples = len(test_dataset)
+        metrics["test_samples"] = max_test_samples
+
+        trainer.log_metrics("test", metrics)
+        trainer.save_metrics("test", metrics)
 
 
 def _mp_fn(index):

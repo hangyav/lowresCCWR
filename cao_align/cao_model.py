@@ -1,4 +1,6 @@
 import logging
+from tqdm.auto import tqdm
+import numpy as np
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple, Union
 from collections.abc import Sized
@@ -31,7 +33,8 @@ from transformers.trainer_pt_utils import (
         DistributedSamplerWithLoop,
 )
 
-from cao_align.utils import MultiDataLoader
+from cao_align.multilingual_alignment import hubness_CSLS, bestk_idx_CSLS
+from cao_align.utils import MultiDataLoader, cat_tensors_with_padding
 
 logger = logging.getLogger(__name__)
 
@@ -82,24 +85,32 @@ class BertForCaoAlign(BertPreTrainedModel):
                 include_clssep,
                 self.bert,
         )
-        trg_features_base = self._process_sentences(
-                trg_input_ids,
-                trg_attention_masks,
-                trg_word_ids_lst,
-                trg_special_word_masks,
-                include_clssep,
-                bert_base,
-        )
 
         alignment_loss = F.mse_loss(
                 src_features[src_alignments[:, 0], src_alignments[:, 1]],
                 trg_features[trg_alignments[:, 0], trg_alignments[:, 1]]
         )
-        regularization_loss = F.mse_loss(
-            trg_features.reshape(-1, trg_features.shape[-1]),
-            trg_features_base.reshape(-1, trg_features_base.shape[-1]),
-        )
-        total_loss = alignment_loss + regularization_loss
+
+        total_loss = alignment_loss
+
+        if bert_base is not None:
+            trg_features_base = self._process_sentences(
+                    trg_input_ids,
+                    trg_attention_masks,
+                    trg_word_ids_lst,
+                    trg_special_word_masks,
+                    include_clssep,
+                    bert_base,
+            )
+
+            regularization_loss = F.mse_loss(
+                trg_features.reshape(-1, trg_features.shape[-1]),
+                trg_features_base.reshape(-1, trg_features_base.shape[-1]),
+            )
+        else:
+            regularization_loss = torch.zeros_like(alignment_loss)
+
+        total_loss =+ regularization_loss
 
         if not return_dict:
             raise NotImplementedError('What to return here?')
@@ -108,6 +119,8 @@ class BertForCaoAlign(BertPreTrainedModel):
                 alignment_loss=alignment_loss,
                 regularization_loss=regularization_loss,
                 loss=total_loss,
+                src_hidden_states=src_features,
+                trg_hidden_states=trg_features,
         )
 
     def _process_sentences(self, input_ids, attention_masks, word_ids_lst,
@@ -134,6 +147,8 @@ class CaoAlignmentOutput(ModelOutput):
     alignment_loss: Optional[torch.FloatTensor] = None
     regularization_loss: Optional[torch.FloatTensor] = None
     loss: Optional[torch.FloatTensor] = None
+    src_hidden_states: Optional[Tuple[torch.FloatTensor]] = None
+    trg_hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     #  logits: torch.FloatTensor = None
     #  hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     #  attentions: Optional[Tuple[torch.FloatTensor]] = None
@@ -258,22 +273,30 @@ class CaoTrainer(Trainer):
                 'training',
         )
 
-    def get_eval_dataloader(self, eval_dataset: Optional[Dataset] = None) -> DataLoader:
+    def get_eval_dataloader(
+            self,
+            eval_dataset: Optional[Dataset] = None,
+            batch_size=-1) -> DataLoader:
         if eval_dataset is None and self.eval_dataset is None:
             raise ValueError("Trainer: evaluation requires an eval_dataset.")
 
         eval_datasets = eval_dataset if eval_dataset is not None else self.eval_dataset
+        batch_size = batch_size if batch_size is not None else self.args.eval_batch_size
         return self._get_data_loader(
                 eval_datasets,
-                self.args.eval_batch_size,
+                batch_size,
                 self.args.per_device_eval_batch_size,
                 'evaluation',
         )
 
-    def get_test_dataloader(self, test_dataset: Dataset) -> DataLoader:
+    def get_test_dataloader(
+            self,
+            test_dataset: Dataset,
+            batch_size=-1) -> DataLoader:
+        batch_size = batch_size if batch_size is not None else self.args.eval_batch_size
         return self._get_data_loader(
                 test_dataset,
-                self.args.eval_batch_size,
+                batch_size,
                 self.args.per_device_eval_batch_size,
                 'test',
         )
@@ -298,10 +321,13 @@ class CaoTrainer(Trainer):
         )
 
     def _get_single_dataloader(self, dataset, batch_size,
-            per_device_batch_size, description) -> DataLoader:
+                               per_device_batch_size, description) -> DataLoader:
 
         if is_datasets_available() and isinstance(dataset, Dataset):
             dataset = self._remove_unused_columns(dataset, description=description)
+
+        if batch_size <= 0:
+            batch_size = len(dataset)
 
         if isinstance(dataset, torch.utils.data.dataset.IterableDataset):
             if self.args.world_size > 1:
@@ -338,7 +364,7 @@ class CaoTrainer(Trainer):
         )
 
     def _get_single_sampler(self, dataset, batch_size, per_device_batch_size) -> Optional[torch.utils.data.sampler.Sampler]:
-        if not isinstance(dataset, Sized):
+        if not isinstance(dataset, Sized) or batch_size <= 0:
             return None
 
         generator = None
@@ -442,3 +468,138 @@ class CaoTrainer(Trainer):
             loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
 
         return (loss, outputs) if return_outputs else loss
+
+    def evaluate(
+        self,
+        eval_dataset: Optional[Dataset] = None,
+        ignore_keys: Optional[List[str]] = None,
+        metric_key_prefix: str = "eval",
+    ) -> Dict[str, float]:
+        #  self.bert_base = self.bert_base.to('cpu')
+        model_training = self.model.training
+        self.model.eval()
+
+        with torch.no_grad():
+            if eval_dataset is not None:
+                # mainly because of the non_context eval we need the full data in
+                # one batch (based on the original implementation)
+                eval_dataloader = self.get_eval_dataloader(
+                    eval_dataset, batch_size=-1)
+            else:
+                eval_dataloader = self.get_eval_dataloader(batch_size=-1)
+                eval_dataset = self.eval_dataset
+
+            res = dict()
+            if type(eval_dataloader) == MultiDataLoader:
+                for lang, dataset in tqdm(
+                    zip(
+                        eval_dataset.datasets.keys(),
+                        eval_dataloader.data_loaders,
+                    ),
+                    desc='Eval languages',
+                    total=len(eval_dataset.datasets)
+                ):
+                    for k, v in self._evaluate_single_dataset(dataset).items():
+                        res[f'{lang}_{k}'] = v
+            else:
+                # this happens if only one dataset config (language) is given
+                lang = list(eval_dataset.datasets.keys())[0]
+                for k, v in self._evaluate_single_dataset(eval_dataloader).items():
+                    res[f'{lang}_{k}'] = v
+
+            if model_training:
+                self.model.train()
+            return res
+
+    def _evaluate_single_dataset(self, dataloader):
+        res = dict()
+
+        with tqdm(desc='Eval context/non_context', total=2) as pbar:
+            for k, v in self._evaluate_retrival_context(dataloader).items():
+                res[f'context_{k}'] = v
+            pbar.update(1)
+
+            for k, v in self._evaluate_retrival_noncontext(dataloader).items():
+                res[f'non_context_{k}'] = v
+            pbar.update(1)
+
+        return res
+
+    def _batch_eval_data(self, inputs, num_samples):
+        bs = self.args.per_device_eval_batch_size
+        for i in range(0, num_samples, bs):
+            yield {
+                k: v[i:i+bs]
+                for k, v in inputs.items()
+            }
+
+    def _evaluate_retrival(self, dataloader, alignments_fn):
+        assert dataloader.batch_size == len(dataloader.dataset)
+
+        with tqdm(total=5) as pbar:
+            inputs = next(dataloader.__iter__())
+            inputs = self._prepare_inputs(inputs)
+            ann_1 = None
+            ann_2 = None
+            for input in self._batch_eval_data(inputs, dataloader.batch_size):
+                output = self.model(
+                        bert_base=None,
+                        return_dict=True,
+                        **input
+                )
+                if ann_1 is None:
+                    ann_1 = output['src_hidden_states']
+                    ann_2 = output['trg_hidden_states']
+                else:
+                    ann_1 = cat_tensors_with_padding(ann_1, output['src_hidden_states'])
+                    ann_2 = cat_tensors_with_padding(ann_2, output['trg_hidden_states'])
+
+            src_alignments, trg_alignments = alignments_fn(inputs)
+            #  ann_1 = output['src_hidden_states']
+            # FIXME for some reason output gets moved to the CPU
+            ann_1 = ann_1.to(self.model.device)
+            ann_1 = ann_1[src_alignments[:, 0], src_alignments[:, 1]]
+            #  ann_2 = output['trg_hidden_states']
+            ann_2 = ann_2.to(self.model.device)
+            ann_2 = ann_2[trg_alignments[:, 0], trg_alignments[:, 1]]
+            pbar.update(1)
+
+            hub_1, hub_2 = hubness_CSLS(ann_1, ann_2)
+            pbar.update(1)
+
+            matches_1 = [
+                bestk_idx_CSLS(ann, ann_2, hub_2)[0].detach().cpu().numpy()
+                for ann in ann_1
+            ]
+            pbar.update(1)
+
+            matches_2 = [
+                bestk_idx_CSLS(ann, ann_1, hub_1)[0].detach().cpu().numpy()
+                for ann in ann_2
+            ]
+            pbar.update(1)
+
+            acc_1 = np.sum(
+                np.array(matches_1) == np.arange(len(matches_1))
+            ) / len(matches_1)
+            acc_2 = np.sum(
+                np.array(matches_2) == np.arange(len(matches_2))
+            ) / len(matches_2)
+            pbar.update(1)
+
+        return {
+            'src2trg': acc_1,
+            'trg2src': acc_2,
+        }
+
+    def _evaluate_retrival_context(self, dataloader):
+        return self._evaluate_retrival(
+            dataloader,
+            lambda inputs: (inputs['src_alignments'], inputs['trg_alignments'])
+        )
+
+    def _evaluate_retrival_noncontext(self, dataloader):
+        return {
+            'src2trg': 0,
+            'trg2src': 0,
+        }
