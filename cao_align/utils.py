@@ -162,8 +162,6 @@ class MultiDataLoader(Sized):
         self.batch_size = batch_size
 
     def __len__(self):
-        if self.batch_size <= 0:
-            return len(self.data_loaders)
         return round(len(self.dataset) / self.batch_size + 0.5)
 
     def __iter__(self):
@@ -184,10 +182,14 @@ class MultiDataLoader(Sized):
 def cat_tensors_with_padding(a, b, value=0):
     diff = a.shape[1] - b.shape[1]
     if diff > 0:
-        tmp = torch.ones(b.shape[0], diff, b.shape[2]) * value
+        shape = list(b.shape)
+        shape[1] = diff
+        tmp = torch.ones(*shape) * value
         b = torch.cat((b, tmp), 1)
     elif diff < 0:
-        tmp = torch.ones(a.shape[0], abs(diff), a.shape[2]) * value
+        shape = list(a.shape)
+        shape[1] = abs(diff)
+        tmp = torch.ones(*shape) * value
         a = torch.cat((a, tmp), 1)
 
     return torch.cat((a, b), 0)

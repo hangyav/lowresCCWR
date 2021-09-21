@@ -273,28 +273,24 @@ class CaoTrainer(Trainer):
 
     def get_eval_dataloader(
             self,
-            eval_dataset: Optional[Dataset] = None,
-            batch_size=-1) -> DataLoader:
+            eval_dataset: Optional[Dataset] = None) -> DataLoader:
         if eval_dataset is None and self.eval_dataset is None:
             raise ValueError("Trainer: evaluation requires an eval_dataset.")
 
         eval_datasets = eval_dataset if eval_dataset is not None else self.eval_dataset
-        batch_size = batch_size if batch_size is not None else self.args.eval_batch_size
         return self._get_data_loader(
                 eval_datasets,
-                batch_size,
+                self.args.eval_batch_size,
                 self.args.per_device_eval_batch_size,
                 'evaluation',
         )
 
     def get_test_dataloader(
             self,
-            test_dataset: Dataset,
-            batch_size=-1) -> DataLoader:
-        batch_size = batch_size if batch_size is not None else self.args.eval_batch_size
+            test_dataset: Dataset) -> DataLoader:
         return self._get_data_loader(
                 test_dataset,
-                batch_size,
+                self.args.eval_batch_size,
                 self.args.per_device_eval_batch_size,
                 'test',
         )
@@ -323,9 +319,6 @@ class CaoTrainer(Trainer):
 
         if is_datasets_available() and isinstance(dataset, Dataset):
             dataset = self._remove_unused_columns(dataset, description=description)
-
-        if batch_size <= 0:
-            batch_size = len(dataset)
 
         if isinstance(dataset, torch.utils.data.dataset.IterableDataset):
             if self.args.world_size > 1:
@@ -369,7 +362,7 @@ class CaoTrainer(Trainer):
         )
 
     def _get_single_sampler(self, dataset, batch_size, per_device_batch_size) -> Optional[torch.utils.data.sampler.Sampler]:
-        if not isinstance(dataset, Sized) or batch_size <= 0:
+        if not isinstance(dataset, Sized):
             return None
 
         generator = None
@@ -488,10 +481,9 @@ class CaoTrainer(Trainer):
             if eval_dataset is not None:
                 # mainly because of the non_context eval we need the full data in
                 # one batch (based on the original implementation)
-                eval_dataloader = self.get_eval_dataloader(
-                    eval_dataset, batch_size=-1)
+                eval_dataloader = self.get_eval_dataloader(eval_dataset)
             else:
-                eval_dataloader = self.get_eval_dataloader(batch_size=-1)
+                eval_dataloader = self.get_eval_dataloader()
                 eval_dataset = self.eval_dataset
 
             res = dict()
@@ -517,17 +509,32 @@ class CaoTrainer(Trainer):
             return res
 
     def _evaluate_single_dataset(self, dataloader, lang):
-        assert dataloader.batch_size == len(dataloader.dataset)
-
         res = dict()
 
         with tqdm(desc=lang, total=9) as pbar:
-            inputs = next(dataloader.__iter__())
-            inputs = self._prepare_inputs(inputs)
             ann_1 = None
             ann_2 = None
+            src_alignments = list()
+            trg_alignments = list()
+            src_input_ids = None
+            trg_input_ids = None
+            sample_num = 0
             losses = dict()
-            for input in self._batch_eval_data(inputs, dataloader.batch_size):
+            for input in dataloader:
+                for a, b in zip(input['src_alignments'],
+                                input['trg_alignments']):
+                    src_alignments.append([a[0].item()+sample_num, a[1].item()])
+                    trg_alignments.append([b[0].item()+sample_num, b[1].item()])
+                if src_input_ids is None:
+                    src_input_ids = input['src_input_ids']
+                    trg_input_ids = input['trg_input_ids']
+                else:
+                    src_input_ids = cat_tensors_with_padding(src_input_ids, input['src_input_ids'])
+                    trg_input_ids = cat_tensors_with_padding(trg_input_ids, input['trg_input_ids'])
+
+                sample_num += input['src_input_ids'].shape[0]
+
+                input = self._prepare_inputs(input)
                 output = self.model(
                         bert_base=None,
                         return_dict=True,
@@ -547,17 +554,23 @@ class CaoTrainer(Trainer):
             # FIXME for some reason output gets moved to the CPU
             ann_1 = ann_1.to(self.model.device)
             ann_2 = ann_2.to(self.model.device)
+            src_alignments = torch.tensor(src_alignments, dtype=int).to(self.model.device)
+            trg_alignments = torch.tensor(trg_alignments, dtype=int).to(self.model.device)
             pbar.update(1)
 
             for k, v in self._evaluate_retrival_context(
-                    inputs,
+                    src_alignments,
+                    trg_alignments,
                     ann_1,
                     ann_2,
                     pbar).items():
                 res[f'context_{k}'] = v
 
             for k, v in self._evaluate_retrival_noncontext(
-                    inputs,
+                    src_input_ids,
+                    trg_input_ids,
+                    src_alignments,
+                    trg_alignments,
                     ann_1,
                     ann_2,
                     pbar).items():
@@ -570,7 +583,6 @@ class CaoTrainer(Trainer):
 
     def _batch_eval_data(self, inputs, num_samples):
         bs = self.args.per_device_eval_batch_size
-        #  bs = 1024
         for i in range(0, num_samples, bs):
             yield {
                 k: v[i:i+bs]
@@ -606,11 +618,10 @@ class CaoTrainer(Trainer):
             'trg2src': acc_2,
         }
 
-    def _evaluate_retrival_context(self, inputs, ann_1, ann_2, pbar):
+    def _evaluate_retrival_context(self, src_alignments, trg_alignments, ann_1,
+                                   ann_2, pbar):
         # gives exactly the same results for some language pairs but there are
         # some slight differences for others. Good enough though
-        src_alignments = inputs['src_alignments']
-        trg_alignments = inputs['trg_alignments']
         ann_1 = ann_1[src_alignments[:, 0], src_alignments[:, 1]]
         ann_2 = ann_2[trg_alignments[:, 0], trg_alignments[:, 1]]
 
@@ -620,13 +631,13 @@ class CaoTrainer(Trainer):
             pbar,
         )
 
-    def _evaluate_retrival_noncontext(self, inputs, ann_1, ann_2, pbar):
+    def _evaluate_retrival_noncontext(self, src_input_ids, trg_input_ids,
+                                      src_alignments, trg_alignments, ann_1,
+                                      ann_2, pbar):
         # XXX does not give the exact results as the original implementation
         # that should be used instead but this is also good to do quick checks
-        src_sentences = detokenize(inputs['src_input_ids'], self.tokenizer)
-        trg_sentences = detokenize(inputs['trg_input_ids'], self.tokenizer)
-        src_alignments = inputs['src_alignments']
-        trg_alignments = inputs['trg_alignments']
+        src_sentences = detokenize(src_input_ids, self.tokenizer)
+        trg_sentences = detokenize(trg_input_ids, self.tokenizer)
 
         final_1 = list()
         final_2 = list()

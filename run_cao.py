@@ -353,10 +353,6 @@ def main():
     if data_args.max_eval_samples == -1:
         data_args.max_eval_samples = None
 
-    assert training_args.per_device_eval_batch_size == 256, 'Currently only' \
-        + ' size of 512 is supported doe to sone incorrect indexing caused by'\
-        + ' _batch_eval_data function in cao_model.py'
-
     # Setup logging
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
