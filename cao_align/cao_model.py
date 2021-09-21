@@ -345,18 +345,25 @@ class CaoTrainer(Trainer):
                 pin_memory=self.args.dataloader_pin_memory,
             )
 
-        sampler = self._get_single_sampler(
-            dataset,
-            batch_size,
-            per_device_batch_size
-        )
+        #  sampler = self._get_single_sampler(
+        #      dataset,
+        #      batch_size,
+        #      per_device_batch_size
+        #  )
+        #  return DataLoader(
+        #      dataset,
+        #      batch_size=batch_size,
+        #      sampler=sampler,
+        #      collate_fn=self.data_collator,
+        #      drop_last=self.args.dataloader_drop_last,
+        #      num_workers=self.args.dataloader_num_workers,
+        #      pin_memory=self.args.dataloader_pin_memory,
+        #  )
 
         return DataLoader(
             dataset,
             batch_size=batch_size,
-            sampler=sampler,
             collate_fn=self.data_collator,
-            drop_last=self.args.dataloader_drop_last,
             num_workers=self.args.dataloader_num_workers,
             pin_memory=self.args.dataloader_pin_memory,
         )
@@ -498,12 +505,12 @@ class CaoTrainer(Trainer):
                     total=len(eval_dataset.datasets)
                 ):
                     for k, v in self._evaluate_single_dataset(dataset, lang).items():
-                        res[f'{lang}_{k}'] = v
+                        res[f'{metric_key_prefix}_{lang}_{k}'] = v
             else:
                 # this happens if only one dataset config (language) is given
                 lang = list(eval_dataset.datasets.keys())[0]
                 for k, v in self._evaluate_single_dataset(eval_dataloader, lang).items():
-                    res[f'{lang}_{k}'] = v
+                    res[f'{metric_key_prefix}_{lang}_{k}'] = v
 
             if model_training:
                 self.model.train()
@@ -519,6 +526,7 @@ class CaoTrainer(Trainer):
             inputs = self._prepare_inputs(inputs)
             ann_1 = None
             ann_2 = None
+            losses = dict()
             for input in self._batch_eval_data(inputs, dataloader.batch_size):
                 output = self.model(
                         bert_base=None,
@@ -531,6 +539,10 @@ class CaoTrainer(Trainer):
                 else:
                     ann_1 = cat_tensors_with_padding(ann_1, output['src_hidden_states'])
                     ann_2 = cat_tensors_with_padding(ann_2, output['trg_hidden_states'])
+
+                for k, v in output.items():
+                    if 'loss' in k:
+                        losses.setdefault(k, list()).append(v.item())
 
             # FIXME for some reason output gets moved to the CPU
             ann_1 = ann_1.to(self.model.device)
@@ -551,10 +563,14 @@ class CaoTrainer(Trainer):
                     pbar).items():
                 res[f'non_context_{k}'] = v
 
+            for k, v in losses.items():
+                res[k] = np.mean(v)
+
         return res
 
     def _batch_eval_data(self, inputs, num_samples):
         bs = self.args.per_device_eval_batch_size
+        #  bs = 1024
         for i in range(0, num_samples, bs):
             yield {
                 k: v[i:i+bs]
@@ -642,3 +658,29 @@ class CaoTrainer(Trainer):
             ann_2,
             pbar,
         )
+
+    def _maybe_log_save_evaluate(self, tr_loss, model, trial, epoch, ignore_keys_for_eval):
+        if self.control.should_log:
+            logs: Dict[str, float] = {}
+            tr_loss_scalar = tr_loss.item()
+            # reset tr_loss to zero
+            tr_loss -= tr_loss
+
+            logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
+            logs["learning_rate"] = self._get_learning_rate()
+
+            self._total_loss_scalar += tr_loss_scalar
+            self._globalstep_last_logged = self.state.global_step
+            self.store_flos()
+
+            self.log(logs)
+
+        metrics = None
+        if self.control.should_evaluate:
+            metrics = self.evaluate(ignore_keys=ignore_keys_for_eval)
+            self.log(metrics)
+            self._report_to_hp_search(trial, epoch, metrics)
+
+        if self.control.should_save:
+            self._save_checkpoint(model, trial, metrics=metrics)
+            self.control = self.callback_handler.on_save(self.args, self.state, self.control)
