@@ -191,3 +191,18 @@ def cat_tensors_with_padding(a, b, value=0):
         a = torch.cat((a, tmp), 1)
 
     return torch.cat((a, b), 0)
+
+
+def detokenize_sentence(input_ids, tokenizer):
+    toks = tokenizer.convert_ids_to_tokens(input_ids)
+    toks = ' '.join(toks)
+    toks = toks.replace(' ##', '').split(' ')
+
+    return toks
+
+
+def detokenize(input_ids, tokenizer):
+    res = list()
+    for ids in input_ids:
+        res.append(detokenize_sentence(ids, tokenizer))
+    return res

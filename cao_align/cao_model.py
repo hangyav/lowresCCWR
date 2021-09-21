@@ -34,7 +34,7 @@ from transformers.trainer_pt_utils import (
 )
 
 from cao_align.multilingual_alignment import hubness_CSLS, bestk_idx_CSLS
-from cao_align.utils import MultiDataLoader, cat_tensors_with_padding
+from cao_align.utils import MultiDataLoader, cat_tensors_with_padding, detokenize
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +91,6 @@ class BertForCaoAlign(BertPreTrainedModel):
                 trg_features[trg_alignments[:, 0], trg_alignments[:, 1]]
         )
 
-        total_loss = alignment_loss
-
         if bert_base is not None:
             trg_features_base = self._process_sentences(
                     trg_input_ids,
@@ -110,7 +108,7 @@ class BertForCaoAlign(BertPreTrainedModel):
         else:
             regularization_loss = torch.zeros_like(alignment_loss)
 
-        total_loss =+ regularization_loss
+        total_loss = alignment_loss + regularization_loss
 
         if not return_dict:
             raise NotImplementedError('What to return here?')
@@ -499,44 +497,24 @@ class CaoTrainer(Trainer):
                     desc='Eval languages',
                     total=len(eval_dataset.datasets)
                 ):
-                    for k, v in self._evaluate_single_dataset(dataset).items():
+                    for k, v in self._evaluate_single_dataset(dataset, lang).items():
                         res[f'{lang}_{k}'] = v
             else:
                 # this happens if only one dataset config (language) is given
                 lang = list(eval_dataset.datasets.keys())[0]
-                for k, v in self._evaluate_single_dataset(eval_dataloader).items():
+                for k, v in self._evaluate_single_dataset(eval_dataloader, lang).items():
                     res[f'{lang}_{k}'] = v
 
             if model_training:
                 self.model.train()
             return res
 
-    def _evaluate_single_dataset(self, dataloader):
-        res = dict()
-
-        with tqdm(desc='Eval context/non_context', total=2) as pbar:
-            for k, v in self._evaluate_retrival_context(dataloader).items():
-                res[f'context_{k}'] = v
-            pbar.update(1)
-
-            for k, v in self._evaluate_retrival_noncontext(dataloader).items():
-                res[f'non_context_{k}'] = v
-            pbar.update(1)
-
-        return res
-
-    def _batch_eval_data(self, inputs, num_samples):
-        bs = self.args.per_device_eval_batch_size
-        for i in range(0, num_samples, bs):
-            yield {
-                k: v[i:i+bs]
-                for k, v in inputs.items()
-            }
-
-    def _evaluate_retrival(self, dataloader, alignments_fn):
+    def _evaluate_single_dataset(self, dataloader, lang):
         assert dataloader.batch_size == len(dataloader.dataset)
 
-        with tqdm(total=5) as pbar:
+        res = dict()
+
+        with tqdm(desc=lang, total=9) as pbar:
             inputs = next(dataloader.__iter__())
             inputs = self._prepare_inputs(inputs)
             ann_1 = None
@@ -554,52 +532,113 @@ class CaoTrainer(Trainer):
                     ann_1 = cat_tensors_with_padding(ann_1, output['src_hidden_states'])
                     ann_2 = cat_tensors_with_padding(ann_2, output['trg_hidden_states'])
 
-            src_alignments, trg_alignments = alignments_fn(inputs)
-            #  ann_1 = output['src_hidden_states']
             # FIXME for some reason output gets moved to the CPU
             ann_1 = ann_1.to(self.model.device)
-            ann_1 = ann_1[src_alignments[:, 0], src_alignments[:, 1]]
-            #  ann_2 = output['trg_hidden_states']
             ann_2 = ann_2.to(self.model.device)
-            ann_2 = ann_2[trg_alignments[:, 0], trg_alignments[:, 1]]
             pbar.update(1)
 
-            hub_1, hub_2 = hubness_CSLS(ann_1, ann_2)
-            pbar.update(1)
+            for k, v in self._evaluate_retrival_context(
+                    inputs,
+                    ann_1,
+                    ann_2,
+                    pbar).items():
+                res[f'context_{k}'] = v
 
-            matches_1 = [
-                bestk_idx_CSLS(ann, ann_2, hub_2)[0].detach().cpu().numpy()
-                for ann in ann_1
-            ]
-            pbar.update(1)
+            for k, v in self._evaluate_retrival_noncontext(
+                    inputs,
+                    ann_1,
+                    ann_2,
+                    pbar).items():
+                res[f'non_context_{k}'] = v
 
-            matches_2 = [
-                bestk_idx_CSLS(ann, ann_1, hub_1)[0].detach().cpu().numpy()
-                for ann in ann_2
-            ]
-            pbar.update(1)
+        return res
 
-            acc_1 = np.sum(
-                np.array(matches_1) == np.arange(len(matches_1))
-            ) / len(matches_1)
-            acc_2 = np.sum(
-                np.array(matches_2) == np.arange(len(matches_2))
-            ) / len(matches_2)
-            pbar.update(1)
+    def _batch_eval_data(self, inputs, num_samples):
+        bs = self.args.per_device_eval_batch_size
+        for i in range(0, num_samples, bs):
+            yield {
+                k: v[i:i+bs]
+                for k, v in inputs.items()
+            }
+
+    def _evaluate_retrival(self, ann_1, ann_2, pbar):
+        hub_1, hub_2 = hubness_CSLS(ann_1, ann_2)
+        pbar.update(1)
+
+        matches_1 = [
+            bestk_idx_CSLS(ann, ann_2, hub_2)[0].detach().cpu().numpy()
+            for ann in ann_1
+        ]
+        pbar.update(1)
+
+        matches_2 = [
+            bestk_idx_CSLS(ann, ann_1, hub_1)[0].detach().cpu().numpy()
+            for ann in ann_2
+        ]
+        pbar.update(1)
+
+        acc_1 = np.sum(
+            np.array(matches_1) == np.arange(len(matches_1))
+        ) / len(matches_1)
+        acc_2 = np.sum(
+            np.array(matches_2) == np.arange(len(matches_2))
+        ) / len(matches_2)
+        pbar.update(1)
 
         return {
             'src2trg': acc_1,
             'trg2src': acc_2,
         }
 
-    def _evaluate_retrival_context(self, dataloader):
+    def _evaluate_retrival_context(self, inputs, ann_1, ann_2, pbar):
+        # gives exactly the same results for some language pairs but there are
+        # some slight differences for others. Good enough though
+        src_alignments = inputs['src_alignments']
+        trg_alignments = inputs['trg_alignments']
+        ann_1 = ann_1[src_alignments[:, 0], src_alignments[:, 1]]
+        ann_2 = ann_2[trg_alignments[:, 0], trg_alignments[:, 1]]
+
         return self._evaluate_retrival(
-            dataloader,
-            lambda inputs: (inputs['src_alignments'], inputs['trg_alignments'])
+            ann_1,
+            ann_2,
+            pbar,
         )
 
-    def _evaluate_retrival_noncontext(self, dataloader):
-        return {
-            'src2trg': 0,
-            'trg2src': 0,
-        }
+    def _evaluate_retrival_noncontext(self, inputs, ann_1, ann_2, pbar):
+        # XXX does not give the exact results as the original implementation
+        # that should be used instead but this is also good to do quick checks
+        src_sentences = detokenize(inputs['src_input_ids'], self.tokenizer)
+        trg_sentences = detokenize(inputs['trg_input_ids'], self.tokenizer)
+        src_alignments = inputs['src_alignments']
+        trg_alignments = inputs['trg_alignments']
+
+        final_1 = list()
+        final_2 = list()
+        found_1 = list()
+        found_2 = list()
+        final_idx_1 = list()
+        final_idx_2 = list()
+        for src, trg in zip(src_alignments, trg_alignments):
+            final_1.append(src_sentences[src[0]][src[1]])
+            final_2.append(trg_sentences[trg[0]][trg[1]])
+
+        for i in range(len(final_1)):
+            if final_1[i] not in found_1:
+                found_1.append(final_1[i])
+                found_2.append(final_2[i])
+                final_idx_1.append(src_alignments[i].cpu().numpy())
+                final_idx_2.append(trg_alignments[i].cpu().numpy())
+
+        final_idx_1 = torch.tensor(
+            final_idx_1, dtype=src_alignments.dtype).to(src_alignments.device)
+        final_idx_2 = torch.tensor(
+            final_idx_2, dtype=trg_alignments.dtype).to(trg_alignments.device)
+
+        ann_1 = ann_1[final_idx_1[:, 0], final_idx_1[:, 1]]
+        ann_2 = ann_2[final_idx_2[:, 0], final_idx_2[:, 1]]
+
+        return self._evaluate_retrival(
+            ann_1,
+            ann_2,
+            pbar,
+        )

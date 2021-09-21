@@ -271,3 +271,24 @@ def test_pipeline(examples, expected, equals,
         assert output['loss'].item() == expected['loss']
     else:
         assert output['loss'].item() != expected['loss']
+
+
+@pytest.mark.parametrize('examples,expected', [
+    (
+        [
+            'I like beer .',
+            'Ich mag Weißbier und Kartoffel .',
+        ],
+        [
+            '[CLS] I like beer . [SEP]'.split(),
+            '[CLS] Ich mag Weißbier und Kartoffel . [SEP]'.split(),
+        ],
+    ),
+])
+def test_detokenize(examples, expected, tokenizer_bert_multilingual_cased):
+    output = cu.detokenize(
+        tokenizer_bert_multilingual_cased(examples)['input_ids'],
+        tokenizer_bert_multilingual_cased,
+    )
+
+    assert output == expected
