@@ -29,6 +29,8 @@ from functools import partial
 from dataclasses import dataclass, field
 from typing import Optional
 
+#  from torch.optim import Adam
+#  from torch.optim.lr_scheduler import LambdaLR
 import datasets
 from datasets import load_dataset
 
@@ -468,6 +470,19 @@ def main():
     )
 
     # Initialize our Trainer
+    #  optimizer = Adam([param for param in model.parameters() if
+    #                    param.requires_grad], lr=training_args.learning_rate,
+    #                   betas=(training_args.adam_beta1, training_args.adam_beta2), eps=1e-9)
+    #
+    #  def lr_lambda(current_step: int):
+    #      if current_step < training_args.warmup_steps:
+    #          return float(current_step) / float(max(1, training_args.warmup_steps))
+    #      return 1.0
+    #
+    #  scheduler = LambdaLR(
+    #      optimizer,
+    #      lr_lambda,
+    #  )
     #  trainer = Trainer(
     trainer = CaoTrainer(
         model=model,
@@ -478,10 +493,16 @@ def main():
         data_collator=data_collator,
         bert_base=model_base,
         include_clssep=model_args.include_clssep,
+        #  optimizers=(optimizer, scheduler),
     )
 
     # Training
     if training_args.do_train:
+        if training_args.do_eval:
+            # avaluate the base model
+            metrics = trainer.evaluate()
+            trainer.log(metrics)
+
         checkpoint = None
         if training_args.resume_from_checkpoint is not None:
             checkpoint = training_args.resume_from_checkpoint

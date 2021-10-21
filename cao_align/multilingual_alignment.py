@@ -173,7 +173,7 @@ class WordLevelBert(nn.Module):
         #                          output_all_encoded_layers=False)
         #  del _
         # for each word, only keep last encoded token.
-        all_end_mask = all_end_mask.to(torch.uint8).unsqueeze(-1)
+        all_end_mask = all_end_mask.to(torch.bool).unsqueeze(-1)
         features_packed = features.masked_select(all_end_mask)
         features_packed = features_packed.reshape(-1, features.shape[-1])
 
@@ -443,7 +443,8 @@ def align_bert_multiple(train, model, model_base,
                         num_sentences, languages, batch_size,
                         model_path,
                         splitbatch_size=4, epochs=1,
-                        learning_rate=0.00005, learning_rate_warmup_frac=0.1):
+                        learning_rate=0.00005, learning_rate_warmup_frac=0.1,
+                        dev=None, dev_steps=1000):
     # Adam hparams from Attention Is All You Need
     trainer = torch.optim.Adam([param for param in model.parameters() if
                                 param.requires_grad], lr=1.,
@@ -458,15 +459,18 @@ def align_bert_multiple(train, model, model_base,
     def schedule_lr(iteration):
         iteration = iteration + 1
         if iteration <= learning_rate_warmup_steps:
-            logger.info("Warming up, iter {}/{}".format(iteration, learning_rate_warmup_steps))
+            logger.info("Warming up, iter {}/{} ({})".format(iteration, learning_rate_warmup_steps, iteration * warmup_coeff))
             set_lr(iteration * warmup_coeff)
 
     model_base.eval() # freeze and remember initial model
 
     total_processed = 0
+    steps = 0
     for epoch in range(epochs):
         for i in range(0, num_sentences, batch_size):
             loss = None
+            loss_1_tmp = None
+            loss_2_tmp = None
             model.train()
             schedule_lr(total_processed // (len(languages)))
             for j, language in enumerate(languages):
@@ -495,23 +499,37 @@ def align_bert_multiple(train, model, model_base,
                     loss_batch = loss_1 + loss_2
                     if loss is None:
                         loss = loss_batch
+                        loss_1_tmp = loss_1
+                        loss_2_tmp = loss_2
                     else:
                         loss += loss_batch
+                        loss_1_tmp += loss_1
+                        loss_2_tmp += loss_2
                 total_processed += len(ss_1)
 
-            logger.info("Sentences {}-{}/{}, Loss: {}".format(
-                    i, min(i+batch_size, num_sentences), num_sentences, loss))
+            logger.info("Sentences {}-{}/{}, align_loss: {}, reg_loss: {}, Loss: {}".format(
+                    i, min(i+batch_size, num_sentences), num_sentences, loss_1_tmp, loss_2_tmp, loss))
             loss.backward()
             trainer.step()
             trainer.zero_grad()
+            steps += 1
+            if dev is not None and steps % dev_steps == 0:
+                with torch.no_grad():
+                    model.eval()
+                    print("Validation:")
+                    for lang, dev_lang in zip(languages, dev):
+                        print("Word retrieval accuracy ({}):".format(lang), evaluate_retrieval_context(dev_lang, model), flush=True)
+                    model.train()
 
-    torch.save(
-            {
-                'state_dict': model.state_dict(),
-                'trainer': trainer.state_dict(),
-            },
-            model_path
-    )
+    if model_path is not None:
+        torch.save(
+                {
+                    'state_dict': model.state_dict(),
+                    'trainer': trainer.state_dict(),
+                },
+                model_path
+        )
+    return model
 
 
 def normalize(vecs):
@@ -641,7 +659,8 @@ if __name__ == '__main__':
     parser.add_argument('--languages', nargs='*', default=['es', 'bg', 'fr', 'de', 'el', 'ne'], help='Languages to use')
     parser.add_argument('--mode', choices=['train', 'valid', 'test'], nargs='*', default=['train'], help='Run mode')
     parser.add_argument('--model_type', default='bert-base-multilingual-cased', help='Model type or folder containing a custom one')
-    parser.add_argument('--model_path', default='none', help='Model to save or load')
+    parser.add_argument('--model_path', default='none', help='Model to load')
+    parser.add_argument('--model_output_path', default='none', help='Model to save')
     parser.add_argument('--data_dir', required=True, help='Dir of aligned data')
     parser.add_argument('--cuda', default=None, help='Use a GPU or not')
     args = parser.parse_args()
@@ -652,7 +671,8 @@ if __name__ == '__main__':
     # following 250000 sentences bur for nepali
     # there are only 67869 sentences.
     # So we should put 67869 here
-    num_sent = 3000
+    #  num_sent = 3000
+    num_sent = 250000
     num_dev = 1024
     num_test = 1024
 
@@ -660,6 +680,7 @@ if __name__ == '__main__':
     mode = args.mode
     model_type = args.model_type
     model_path = args.model_path if args.model_path.lower() != 'none' else None
+    model_output_path = args.model_output_path if args.model_output_path.lower() != 'none' else None
     data_dir = args.data_dir
     do_lower_case = False
 
@@ -701,6 +722,8 @@ if __name__ == '__main__':
     data = [load_align_corpus(sent_paths[lang], align_paths[lang], max_sent=num_sent)
             for lang in tqdm(languages, desc='Loading datasets')]
 
+    trained_model = None
+    dev = [(sent_1[num_test:num_test+num_dev], sent_2[num_test:num_test+num_dev], align[num_test:num_test+num_dev]) for sent_1, sent_2, align in data]
     if 'train' in mode:
         assert model_path is not None
         #  training codes start here,  comment these following five lines
@@ -719,15 +742,18 @@ if __name__ == '__main__':
         epochs = 1
         #  their default was given 0.00005
         learning_rate = 0.00005
-        align_bert_multiple(train, model, model_base, num_sent, languages, batch_size, model_path, learning_rate=learning_rate, epochs=epochs)
+        trained_model = align_bert_multiple(train, model, model_base, num_sent, languages,
+                                            batch_size, model_output_path, learning_rate=learning_rate, epochs=epochs, dev=dev)
 
     if 'valid' in mode:
         #  They didnt use dev set for alignment in their given script so commenting
         #  it out validation codes start here,  comment these following five lines
         #  during training and testing
-        dev = [(sent_1[num_test:num_test+num_dev], sent_2[num_test:num_test+num_dev], align[num_test:num_test+num_dev]) for sent_1, sent_2, align in data]
-        model = WordLevelBert(model_type, do_lower_case,
-                              model_path=model_path, use_cuda=use_cuda)
+        if trained_model is not None:
+            model = trained_model
+        else:
+            model = WordLevelBert(model_type, do_lower_case,
+                                  model_path=model_path, use_cuda=use_cuda)
         for lang, dev_lang in zip(languages, dev):
             print(lang)
             print("Word retrieval accuracy:", evaluate_retrieval_context(dev_lang, model), flush=True)
@@ -737,8 +763,11 @@ if __name__ == '__main__':
         #  training and validation
         test = [(sent_1[:num_test], sent_2[:num_test], align[:num_test]) for sent_1, sent_2, align in data]
 
-        model = WordLevelBert(model_type, do_lower_case,
-                              model_path=model_path, use_cuda=use_cuda)
+        if trained_model is not None:
+            model = trained_model
+        else:
+            model = WordLevelBert(model_type, do_lower_case,
+                                  model_path=model_path, use_cuda=use_cuda)
         print('\nContext Evaluation: \n')
         for lang, dev_lang in zip(languages, tqdm(test)):
             print("For "+str(lang)+"-en  : ")

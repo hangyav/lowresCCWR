@@ -86,11 +86,6 @@ class BertForCaoAlign(BertPreTrainedModel):
                 self.bert,
         )
 
-        alignment_loss = F.mse_loss(
-                src_features[src_alignments[:, 0], src_alignments[:, 1]],
-                trg_features[trg_alignments[:, 0], trg_alignments[:, 1]]
-        )
-
         if bert_base is not None:
             trg_features_base = self._process_sentences(
                     trg_input_ids,
@@ -101,12 +96,20 @@ class BertForCaoAlign(BertPreTrainedModel):
                     bert_base,
             )
 
+            alignment_loss = F.mse_loss(
+                    src_features[src_alignments[:, 0], src_alignments[:, 1]],
+                    trg_features_base[trg_alignments[:, 0], trg_alignments[:, 1]]
+            )
+
             regularization_loss = F.mse_loss(
                 trg_features.reshape(-1, trg_features.shape[-1]),
                 trg_features_base.reshape(-1, trg_features_base.shape[-1]),
             )
         else:
-            regularization_loss = torch.zeros_like(alignment_loss)
+            regularization_loss = torch.zeros(
+                (1, 1), dtype=torch.float).to(self.bert.device)
+            alignment_loss = torch.zeros(
+                (1, 1), dtype=torch.float).to(self.bert.device)
 
         total_loss = alignment_loss + regularization_loss
 
@@ -476,6 +479,7 @@ class CaoTrainer(Trainer):
         #  self.bert_base = self.bert_base.to('cpu')
         model_training = self.model.training
         self.model.eval()
+        self.bert_base = self.bert_base.cpu()
 
         with torch.no_grad():
             if eval_dataset is not None:
@@ -506,6 +510,7 @@ class CaoTrainer(Trainer):
 
             if model_training:
                 self.model.train()
+            self.bert_base = self.bert_base.to(self.model.device)
             return res
 
     def _evaluate_single_dataset(self, dataloader, lang):
