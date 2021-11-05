@@ -3,6 +3,7 @@ import torch
 from dataclasses import dataclass
 from typing import Dict
 from transformers import PreTrainedTokenizerBase
+from transformers.data.data_collator import DataCollatorForLanguageModeling
 
 
 @dataclass
@@ -144,6 +145,38 @@ class DataCollatorForCaoAlignment:
                 return i
         return -1
 
+
+class DataCollatorForCaoMLMAlignment(DataCollatorForCaoAlignment):
+
+    tokenizer: PreTrainedTokenizerBase
+    max_length: int
+    include_clssep: bool
+
+    def __init__(self, tokenizer, max_length, include_clssep,
+                 mlm_probability=0.15, pad_to_multiple_of_8=False):
+        super().__init__(tokenizer, max_length, include_clssep)
+        self.mlm_collator = DataCollatorForLanguageModeling(
+            tokenizer=tokenizer,
+            mlm_probability=mlm_probability,
+            pad_to_multiple_of=8 if pad_to_multiple_of_8 else None,
+        )
+
+    def __call__(self, examples) -> Dict[str, torch.Tensor]:
+        output = super().__call__(examples)
+
+        for prefix in ['src', 'trg']:
+            input_ids = output[f'{prefix}_input_ids']
+            special_token_masks = output[f'{prefix}_special_word_masks']
+            special_token_masks = (special_token_masks >
+                                   0).type(torch.IntTensor)
+
+            masked_inputs, labels = self.mlm_collator.mask_tokens(
+                input_ids.clone(), special_token_masks)
+
+            output[f'{prefix}_mlm_input_ids'] = masked_inputs
+            output[f'{prefix}_mlm_labels'] = labels
+
+        return output
 
 class MultiDataset(Sized):
 

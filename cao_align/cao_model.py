@@ -7,6 +7,7 @@ from collections.abc import Sized
 
 import torch
 from torch import nn
+from torch.nn import CrossEntropyLoss
 from torch.nn import functional as F
 from torch.utils.data.dataset import Dataset
 from torch.utils.data.dataloader import DataLoader
@@ -18,6 +19,8 @@ from transformers import (
 )
 from transformers.file_utils import ModelOutput
 from transformers.modeling_utils import PreTrainedModel
+from transformers.models.bert.modeling_bert import BertOnlyMLMHead
+from transformers.modeling_outputs import MaskedLMOutput
 from transformers.training_args import TrainingArguments, ParallelMode
 from transformers.data.data_collator import DataCollator
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
@@ -69,6 +72,9 @@ class BertForCaoAlign(BertPreTrainedModel):
         return_dict = return_dict if return_dict is not None \
                 else self.config.use_return_dict
 
+        if not return_dict:
+            raise NotImplementedError('What to return here?')
+
         src_features = self._process_sentences(
                 src_input_ids,
                 src_attention_masks,
@@ -113,9 +119,6 @@ class BertForCaoAlign(BertPreTrainedModel):
 
         total_loss = alignment_loss + regularization_loss
 
-        if not return_dict:
-            raise NotImplementedError('What to return here?')
-
         return CaoAlignmentOutput(
                 alignment_loss=alignment_loss,
                 regularization_loss=regularization_loss,
@@ -142,6 +145,145 @@ class BertForCaoAlign(BertPreTrainedModel):
         return features
 
 
+class BertForCaoAlignMLM(BertForCaoAlign):
+
+    _keys_to_ignore_on_load_unexpected = [r"pooler"]
+    _keys_to_ignore_on_load_missing = [r"position_ids", r"predictions.decoder.bias"]
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.cls = BertOnlyMLMHead(config)
+
+        self.init_weights()
+
+    def forward(
+        self,
+        src_input_ids,
+        src_word_ids_lst,
+        src_special_word_masks,
+        trg_input_ids,
+        trg_word_ids_lst,
+        trg_special_word_masks,
+        src_attention_masks,
+        trg_attention_masks,
+        src_alignments,
+        trg_alignments,
+        include_clssep=True,
+        return_dict=None,
+        bert_base=None,
+        src_mlm_input_ids=None,
+        src_mlm_labels=None,
+        src_mlm_special_word_masks=None,
+        trg_mlm_input_ids=None,
+        trg_mlm_labels=None,
+        trg_mlm_special_word_masks=None,
+    ):
+        alignment_output = super().forward(
+            src_input_ids,
+            src_word_ids_lst,
+            src_special_word_masks,
+            trg_input_ids,
+            trg_word_ids_lst,
+            trg_special_word_masks,
+            src_attention_masks,
+            trg_attention_masks,
+            src_alignments,
+            trg_alignments,
+            include_clssep,
+            return_dict,
+            bert_base,
+        )
+        alignment_mlm_loss = alignment_output.loss
+        src_mlm_output = None
+        trg_mlm_output = None
+
+        if src_mlm_input_ids is not None:
+            src_mlm_output = self._lm_forward(
+                    src_mlm_input_ids,
+                    src_attention_masks,
+                    labels=src_mlm_labels,
+                    return_dict=return_dict,
+            )
+            alignment_mlm_loss = alignment_mlm_loss + src_mlm_output.loss
+
+        if trg_mlm_input_ids is not None:
+            trg_mlm_output = self._lm_forward(
+                    trg_mlm_input_ids,
+                    trg_attention_masks,
+                    labels=trg_mlm_labels,
+                    return_dict=return_dict,
+            )
+            alignment_mlm_loss = alignment_mlm_loss + trg_mlm_output.loss
+
+        output = CaoAlignmentMLMOutput(
+            alignment_loss=alignment_output.alignment_loss,
+            regularization_loss=alignment_output.regularization_loss,
+            combined_alignment_loss=alignment_output.loss,
+            src_hidden_states=alignment_output.src_hidden_states,
+            trg_hidden_states=alignment_output.trg_hidden_states,
+            src_mlm_output=src_mlm_output,
+            trg_mlm_output=trg_mlm_output,
+            loss=alignment_mlm_loss,
+        )
+
+        return output
+
+    def _lm_forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        encoder_hidden_states=None,
+        encoder_attention_mask=None,
+        labels=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+    ):
+        return_dict = return_dict if return_dict is not None \
+                else self.config.use_return_dict
+
+        outputs = self.bert(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_attention_mask=encoder_attention_mask,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        sequence_output = outputs[0]
+        prediction_scores = self.cls(sequence_output)
+
+        masked_lm_loss = None
+        if labels is not None:
+            loss_fct = CrossEntropyLoss()  # -100 index = padding token
+            masked_lm_loss = loss_fct(
+                prediction_scores.view(
+                    -1,
+                    self.config.vocab_size
+                ), labels.view(-1))
+
+        if not return_dict:
+            output = (prediction_scores,) + outputs[2:]
+            return ((masked_lm_loss,) + output) if masked_lm_loss is not None else output
+
+        return MaskedLMOutput(
+            loss=masked_lm_loss,
+            logits=prediction_scores,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+
+
 @dataclass
 class CaoAlignmentOutput(ModelOutput):
 
@@ -150,9 +292,14 @@ class CaoAlignmentOutput(ModelOutput):
     loss: Optional[torch.FloatTensor] = None
     src_hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     trg_hidden_states: Optional[Tuple[torch.FloatTensor]] = None
-    #  logits: torch.FloatTensor = None
-    #  hidden_states: Optional[Tuple[torch.FloatTensor]] = None
-    #  attentions: Optional[Tuple[torch.FloatTensor]] = None
+
+
+@dataclass
+class CaoAlignmentMLMOutput(CaoAlignmentOutput):
+
+    combined_alignment_loss: Optional[torch.FloatTensor] = None
+    src_mlm_output: MaskedLMOutput = None
+    trg_mlm_output: MaskedLMOutput = None
 
 
 class SubwordToTokenStrategyBase():

@@ -23,6 +23,11 @@ def align_bert():
     return cm.BertForCaoAlign.from_pretrained('bert-base-multilingual-cased')
 
 
+@pytest.fixture
+def align_mlm_bert():
+    return cm.BertForCaoAlignMLM.from_pretrained('bert-base-multilingual-cased')
+
+
 @pytest.mark.parametrize('examples,expected', [
     (
         [
@@ -271,6 +276,134 @@ def test_pipeline(examples, expected, equals,
         assert output['loss'].item() == expected['loss']
     else:
         assert output['loss'].item() != expected['loss']
+
+
+@pytest.mark.parametrize('examples,expected,equals', [
+    (
+        {
+            'source': [
+                'I like beer .',
+            ],
+            'target': [
+                'I like beer .',
+            ],
+            'alignment': [
+                [(0, 0), (1, 1), (2, 2), (3, 3)],
+            ],
+        },
+        {
+            'alignment_loss': 0.0,
+            'regularization_loss': 0.0,
+            'combined_alignment_loss': 0.0,
+            'loss': 0.0,
+        },
+        {
+            'alignment_equals': True,
+            'regularization_equals': True,
+            'combined_equals': True,
+            'equals': False,
+        },
+    ),
+    (
+        {
+            'source': [
+                'I like beer .',
+            ],
+            'target': [
+                'I like beer .',
+            ],
+            'alignment': [
+                [(0, 0), (1, 2), (2, 1), (3, 3)],
+            ],
+        },
+        {
+            'alignment_loss': 0.0,
+            'regularization_loss': 0.0,
+            'combined_alignment_loss': 0.0,
+            'loss': 0.0,
+        },
+        {
+            'alignment_equals': False,
+            'regularization_equals': True,
+            'combined_equals': False,
+            'equals': False,
+        },
+    ),
+    (
+        {
+            'source': [
+                'I like beer .',
+            ],
+            'target': [
+                'Ich mag Bier .',
+            ],
+            'alignment': [
+                [(0, 0), (1, 1), (2, 2), (3, 3)],
+            ],
+        },
+        {
+            'alignment_loss': 0.0,
+            'regularization_loss': 0.0,
+            'combined_alignment_loss': 0.0,
+            'loss': 0.0,
+        },
+        {
+            'alignment_equals': False,
+            'regularization_equals': True,
+            'combined_equals': False,
+            'equals': False,
+        },
+    ),
+])
+def test_mlm_pipeline(examples, expected, equals,
+                      bert_base, align_mlm_bert, tokenizer_bert_multilingual_cased):
+    collator = cu.DataCollatorForCaoMLMAlignment(
+        tokenizer=tokenizer_bert_multilingual_cased,
+        max_length=align_mlm_bert.bert.embeddings.position_embeddings.num_embeddings,
+        include_clssep=True,
+        mlm_probability=1.0,
+        pad_to_multiple_of_8=False,
+    )
+    dataset = Dataset.from_dict(examples)
+    dataset = dataset.map(
+        partial(rc.tokenize_function, tokenizer_bert_multilingual_cased),
+        batched=True,
+        num_proc=1,
+        remove_columns=dataset.column_names,
+        load_from_cache_file=False,
+        desc="Running tokenizer on every text in dataset",
+    )
+    batch = collator(dataset)
+
+    assert (batch['src_input_ids'] != batch['src_mlm_input_ids']).type(
+        torch.IntTensor).sum().item() > 0
+    assert (batch['trg_input_ids'] != batch['trg_mlm_input_ids']).type(
+        torch.IntTensor).sum().item() > 0
+
+    output = align_mlm_bert(return_dict=True, bert_base=bert_base, **batch)
+
+    if equals['alignment_equals']:
+        assert output['alignment_loss'].item() == expected['alignment_loss']
+    else:
+        assert output['alignment_loss'].item() != expected['alignment_loss']
+
+    if equals['regularization_equals']:
+        assert output['regularization_loss'].item() == expected['regularization_loss']
+    else:
+        assert output['regularization_loss'].item() != expected['regularization_loss']
+
+    if equals['combined_equals']:
+        assert output['combined_alignment_loss'].item() == expected['combined_alignment_loss']
+    else:
+        assert output['combined_alignment_loss'].item() != expected['combined_alignment_loss']
+
+    if equals['equals']:
+        assert output['loss'].item() == expected['loss']
+    else:
+        assert output['loss'].item() != expected['loss']
+
+    assert output.src_mlm_output.loss.item() > 0.0
+    assert output.trg_mlm_output.loss.item() > 0.0
 
 
 @pytest.mark.parametrize('examples,expected', [
