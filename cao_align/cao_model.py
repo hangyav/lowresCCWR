@@ -593,15 +593,25 @@ class CaoTrainer(Trainer):
                         include_clssep=self.include_clssep, **inputs)
 
         if self.args.detailed_logging and self.state.global_step % self.args.logging_steps == 0:
+            metrics = {
+                'alignment_loss': outputs['alignment_loss'].item(),
+                'regularization_loss': outputs['regularization_loss'].item(),
+            }
+            if type(model) == BertForCaoAlign:
+                metrics['combined_alignment_loss'] = outputs['loss'].item()
+            elif type(model) == BertForCaoAlignMLM:
+                metrics['combined_alignment_loss'] = outputs['combined_alignment_loss'].item()
+                metrics['src_mlm_loss'] = outputs['src_mlm_output']['loss'].item()
+                metrics['trg_mlm_loss'] = outputs['trg_mlm_output']['loss'].item()
+                metrics['combined_alignment_mlm_loss'] = outputs['loss'].item()
+            else:
+                raise NotImplementedError(f'{type(model)} is not supported!')
+
             self.control = self.callback_handler.on_log(
-                    self.args,
-                    self.state,
-                    self.control,
-                    {
-                        'joint_loss': outputs['loss'].item(),
-                        'alignment_loss': outputs['alignment_loss'].item(),
-                        'regularization_loss': outputs['regularization_loss'].item(),
-                    }
+                self.args,
+                self.state,
+                self.control,
+                metrics
             )
 
         # Save past state if it exists

@@ -15,7 +15,11 @@ def tokenizer_bert_multilingual_cased():
 
 @pytest.fixture
 def bert_base():
-    return BertModel.from_pretrained('bert-base-multilingual-cased')
+    model_base = BertModel.from_pretrained('bert-base-multilingual-cased')
+    for param in model_base.parameters():
+        param.requires_grad = False
+
+    return model_base
 
 
 @pytest.fixture
@@ -276,6 +280,171 @@ def test_pipeline(examples, expected, equals,
         assert output['loss'].item() == expected['loss']
     else:
         assert output['loss'].item() != expected['loss']
+
+
+@pytest.mark.parametrize('train,eval', [
+    (
+        {
+            'source': [
+                'I like beer .',
+                'I like beer .',
+            ],
+            'target': [
+                'I like beer .',
+                'Ich mag Bier .'
+            ],
+            'alignment': [
+                [(0, 0), (1, 1), (2, 2), (3, 3)],
+                [(0, 0), (1, 1), (2, 2), (3, 3)],
+            ],
+        },
+        {
+            'source': [
+                # needs to have at least k=10 tokens
+                'I like water . 5 6 7 8 9 10',
+            ],
+            'target': [
+                'I like water . 5 6 7 8 9 10',
+            ],
+            'alignment': [
+                [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4),
+                 (5, 5), (6, 6), (7, 7), (8, 8), (9, 9)],
+            ],
+        },
+    ),
+])
+def test_trainer(train, eval,
+                 bert_base, align_bert, tokenizer_bert_multilingual_cased):
+    collator = cu.DataCollatorForCaoAlignment(
+        tokenizer=tokenizer_bert_multilingual_cased,
+        max_length=align_bert.bert.embeddings.position_embeddings.num_embeddings,
+        include_clssep=True,
+    )
+    train_dataset = Dataset.from_dict(train)
+    train_dataset = train_dataset.map(
+        partial(rc.tokenize_function, tokenizer_bert_multilingual_cased),
+        batched=True,
+        num_proc=1,
+        remove_columns=train_dataset.column_names,
+        load_from_cache_file=False,
+        desc="Running tokenizer on every text in dataset",
+    )
+    train_dataset = cu.MultiDataset({'test': train_dataset})
+    eval_dataset = Dataset.from_dict(eval)
+    eval_dataset = eval_dataset.map(
+        partial(rc.tokenize_function, tokenizer_bert_multilingual_cased),
+        batched=True,
+        num_proc=1,
+        remove_columns=eval_dataset.column_names,
+        load_from_cache_file=False,
+        desc="Running tokenizer on every text in dataset",
+    )
+    eval_dataset = cu.MultiDataset({'test': eval_dataset})
+    trainer = cm.CaoTrainer(
+        model=align_bert,
+        args=rc.MyTrainingArguments(
+            detailed_logging=True,
+            output_dir='/tmp',
+            logging_steps=1,
+            save_steps=1000,
+            num_train_epochs=1,
+            per_device_train_batch_size=1,
+            evaluation_strategy='steps',
+            eval_steps=2,
+        ),
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        tokenizer=tokenizer_bert_multilingual_cased,
+        data_collator=collator,
+        bert_base=bert_base,
+        include_clssep=rc.ModelArguments().include_clssep,
+    )
+    trainer.train()
+    trainer.evaluate()
+
+
+@pytest.mark.parametrize('train,eval', [
+    (
+        {
+            'source': [
+                'I like beer .',
+                'I like beer .',
+            ],
+            'target': [
+                'I like beer .',
+                'Ich mag Bier .'
+            ],
+            'alignment': [
+                [(0, 0), (1, 1), (2, 2), (3, 3)],
+                [(0, 0), (1, 1), (2, 2), (3, 3)],
+            ],
+        },
+        {
+            'source': [
+                # needs to have at least k=10 tokens
+                'I like water . 5 6 7 8 9 10',
+            ],
+            'target': [
+                'I like water . 5 6 7 8 9 10',
+            ],
+            'alignment': [
+                [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4),
+                 (5, 5), (6, 6), (7, 7), (8, 8), (9, 9)],
+            ],
+        },
+    ),
+])
+def test_trainer_mlm(train, eval,
+                     bert_base, align_mlm_bert,
+                     tokenizer_bert_multilingual_cased):
+    collator = cu.DataCollatorForCaoMLMAlignment(
+        tokenizer=tokenizer_bert_multilingual_cased,
+        max_length=align_mlm_bert.bert.embeddings.position_embeddings.num_embeddings,
+        include_clssep=True,
+        mlm_probability=0.9,
+        pad_to_multiple_of_8=False,
+    )
+    train_dataset = Dataset.from_dict(train)
+    train_dataset = train_dataset.map(
+        partial(rc.tokenize_function, tokenizer_bert_multilingual_cased),
+        batched=True,
+        num_proc=1,
+        remove_columns=train_dataset.column_names,
+        load_from_cache_file=False,
+        desc="Running tokenizer on every text in dataset",
+    )
+    train_dataset = cu.MultiDataset({'test': train_dataset})
+    eval_dataset = Dataset.from_dict(eval)
+    eval_dataset = eval_dataset.map(
+        partial(rc.tokenize_function, tokenizer_bert_multilingual_cased),
+        batched=True,
+        num_proc=1,
+        remove_columns=eval_dataset.column_names,
+        load_from_cache_file=False,
+        desc="Running tokenizer on every text in dataset",
+    )
+    eval_dataset = cu.MultiDataset({'test': eval_dataset})
+    trainer = cm.CaoTrainer(
+        model=align_mlm_bert,
+        args=rc.MyTrainingArguments(
+            detailed_logging=True,
+            output_dir='/tmp',
+            logging_steps=1,
+            save_steps=1000,
+            num_train_epochs=1,
+            per_device_train_batch_size=1,
+            evaluation_strategy='steps',
+            eval_steps=2,
+        ),
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        tokenizer=tokenizer_bert_multilingual_cased,
+        data_collator=collator,
+        bert_base=bert_base,
+        include_clssep=rc.ModelArguments().include_clssep,
+    )
+    trainer.train()
+    trainer.evaluate()
 
 
 @pytest.mark.parametrize('examples,expected,equals', [

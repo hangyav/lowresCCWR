@@ -50,8 +50,12 @@ from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
 from cao_align.cao_data import MAX_SENTENCE_LENGTH
-from cao_align.utils import DataCollatorForCaoAlignment, MultiDataset
-from cao_align.cao_model import BertForCaoAlign
+from cao_align.utils import (
+    DataCollatorForCaoAlignment,
+    MultiDataset,
+    DataCollatorForCaoMLMAlignment,
+)
+from cao_align.cao_model import BertForCaoAlign, BertForCaoAlignMLM
 from cao_align.cao_model import CaoTrainer
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -182,6 +186,10 @@ class DataTrainingArguments:
             "help": "For debugging purposes or quicker training, truncate the number of evaluation examples to this "
             "value if set."
         },
+    )
+    do_mlm: bool = field(default=False, metadata={"help": "Whether to Align+MLM or just Align"})
+    mlm_probability: float = field(
+        default=0.15, metadata={"help": "Ratio of tokens to mask for masked language modeling loss"}
     )
 
 
@@ -328,11 +336,20 @@ def get_datasets(data_args, model_args, training_args, tokenizer, model):
 
     # Data collator
     # This one will take care converting lists to tensors
-    data_collator = DataCollatorForCaoAlignment(
-        tokenizer=tokenizer,
-        max_length=model.bert.embeddings.position_embeddings.num_embeddings,
-        include_clssep=model_args.include_clssep,
-    )
+    if not data_args.do_mlm:
+        data_collator = DataCollatorForCaoAlignment(
+            tokenizer=tokenizer,
+            max_length=model.bert.embeddings.position_embeddings.num_embeddings,
+            include_clssep=model_args.include_clssep,
+        )
+    else:
+        data_collator = DataCollatorForCaoMLMAlignment(
+            tokenizer=tokenizer,
+            max_length=model.bert.embeddings.position_embeddings.num_embeddings,
+            include_clssep=model_args.include_clssep,
+            mlm_probability=data_args.mlm_probability,
+            pad_to_multiple_of_8=False,
+        )
 
     return train_dataset, eval_dataset, test_dataset, data_collator
 
@@ -433,14 +450,24 @@ def main():
         )
 
     if model_args.model_name_or_path:
-        model = BertForCaoAlign.from_pretrained(
-            model_args.model_name_or_path,
-            from_tf=bool(".ckpt" in model_args.model_name_or_path),
-            config=config,
-            cache_dir=model_args.cache_dir,
-            revision=model_args.model_revision,
-            use_auth_token=True if model_args.use_auth_token else None,
-        )
+        if not data_args.do_mlm:
+            model = BertForCaoAlign.from_pretrained(
+                model_args.model_name_or_path,
+                from_tf=bool(".ckpt" in model_args.model_name_or_path),
+                config=config,
+                cache_dir=model_args.cache_dir,
+                revision=model_args.model_revision,
+                use_auth_token=True if model_args.use_auth_token else None,
+            )
+        else:
+            model = BertForCaoAlignMLM.from_pretrained(
+                model_args.model_name_or_path,
+                from_tf=bool(".ckpt" in model_args.model_name_or_path),
+                config=config,
+                cache_dir=model_args.cache_dir,
+                revision=model_args.model_revision,
+                use_auth_token=True if model_args.use_auth_token else None,
+            )
 
         model_base = BertModel.from_pretrained(
             model_args.model_name_or_path,
@@ -453,7 +480,10 @@ def main():
 
     else:
         logger.info("Training new model from scratch")
-        model = BertForCaoAlign.from_config(config)
+        if not data_args.do_mlm:
+            model = BertForCaoAlign.from_config(config)
+        else:
+            model = BertForCaoAlignMLM.from_config(config)
         model_base = BertModel.from_config(config)
 
     model.resize_token_embeddings(len(tokenizer))
