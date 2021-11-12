@@ -29,7 +29,11 @@ def align_bert():
 
 @pytest.fixture
 def align_mlm_bert():
-    return cm.BertForCaoAlignMLM.from_pretrained('bert-base-multilingual-cased')
+    return cm.BertForCaoAlignMLM.from_pretrained(
+        'bert-base-multilingual-cased',
+        src_mlm_weight=0.01,
+        trg_mlm_weight=0.01,
+    )
 
 
 @pytest.mark.parametrize('examples,expected', [

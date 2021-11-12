@@ -148,11 +148,18 @@ class BertForCaoAlign(BertPreTrainedModel):
 class BertForCaoAlignMLM(BertForCaoAlign):
 
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
-    _keys_to_ignore_on_load_missing = [r"position_ids", r"predictions.decoder.bias"]
+    _keys_to_ignore_on_load_missing = [
+        r"position_ids",
+        r"predictions.decoder.bias",
+    ]
 
-    def __init__(self, config):
+    def __init__(self, config, src_mlm_weight, trg_mlm_weight):
         super().__init__(config)
         self.cls = BertOnlyMLMHead(config)
+        self.src_mlm_weight = src_mlm_weight
+        self.trg_mlm_weight = trg_mlm_weight
+        assert self.src_mlm_weight != 0.0 or self.trg_mlm_weight != 0.0, \
+            'Either source or target MLM weight should be none-zero!'
 
         self.init_weights()
 
@@ -197,23 +204,25 @@ class BertForCaoAlignMLM(BertForCaoAlign):
         src_mlm_output = None
         trg_mlm_output = None
 
-        if src_mlm_input_ids is not None:
+        if src_mlm_input_ids is not None and self.src_mlm_weight != 0.0:
             src_mlm_output = self._lm_forward(
                     src_mlm_input_ids,
                     src_attention_masks,
                     labels=src_mlm_labels,
                     return_dict=return_dict,
             )
-            alignment_mlm_loss = alignment_mlm_loss + src_mlm_output.loss
+            alignment_mlm_loss = alignment_mlm_loss \
+                + src_mlm_output.loss * self.src_mlm_weight
 
-        if trg_mlm_input_ids is not None:
+        if trg_mlm_input_ids is not None and self.trg_mlm_weight != 0.0:
             trg_mlm_output = self._lm_forward(
                     trg_mlm_input_ids,
                     trg_attention_masks,
                     labels=trg_mlm_labels,
                     return_dict=return_dict,
             )
-            alignment_mlm_loss = alignment_mlm_loss + trg_mlm_output.loss
+            alignment_mlm_loss = alignment_mlm_loss \
+                + trg_mlm_output.loss * self.trg_mlm_weight
 
         output = CaoAlignmentMLMOutput(
             alignment_loss=alignment_output.alignment_loss,
@@ -601,8 +610,10 @@ class CaoTrainer(Trainer):
                 metrics['combined_alignment_loss'] = outputs['loss'].item()
             elif type(model) == BertForCaoAlignMLM:
                 metrics['combined_alignment_loss'] = outputs['combined_alignment_loss'].item()
-                metrics['src_mlm_loss'] = outputs['src_mlm_output']['loss'].item()
-                metrics['trg_mlm_loss'] = outputs['trg_mlm_output']['loss'].item()
+                metrics['src_mlm_loss'] = outputs['src_mlm_output']['loss'].item(
+                ) if 'src_mlm_output' in outputs else 0.0
+                metrics['trg_mlm_loss'] = outputs['trg_mlm_output']['loss'].item(
+                ) if 'trg_mlm_output' in outputs else 0.0
                 metrics['combined_alignment_mlm_loss'] = outputs['loss'].item()
             else:
                 raise NotImplementedError(f'{type(model)} is not supported!')

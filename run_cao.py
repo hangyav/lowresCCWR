@@ -191,7 +191,16 @@ class DataTrainingArguments:
     mlm_probability: float = field(
         default=0.15, metadata={"help": "Ratio of tokens to mask for masked language modeling loss"}
     )
+    src_mlm_weight: float = field(
+        default=0.01, metadata={"help": "Weight of source language MLM loss. 0.0 to turn off."}
+    )
+    trg_mlm_weight: float = field(
+        default=0.01, metadata={"help": "Weight of target language MLM loss. 0.0 to turn off."}
+    )
 
+    def __post_init__(self):
+        assert not self.do_mlm or self.src_mlm_weight != 0.0 or self.trg_mlm_weight != 0.0, \
+            'Either source or target MLM weight should be none-zero!'
 
 @dataclass
 class MyTrainingArguments(TrainingArguments):
@@ -467,6 +476,8 @@ def main():
                 cache_dir=model_args.cache_dir,
                 revision=model_args.model_revision,
                 use_auth_token=True if model_args.use_auth_token else None,
+                src_mlm_weight=data_args.src_mlm_weight,
+                trg_mlm_weight=data_args.trg_mlm_weight,
             )
 
         model_base = BertModel.from_pretrained(
@@ -483,7 +494,11 @@ def main():
         if not data_args.do_mlm:
             model = BertForCaoAlign.from_config(config)
         else:
-            model = BertForCaoAlignMLM.from_config(config)
+            model = BertForCaoAlignMLM.from_config(
+                config,
+                src_mlm_weight=data_args.src_mlm_weight,
+                trg_mlm_weight=data_args.trg_mlm_weight,
+            )
         model_base = BertModel.from_config(config)
 
     model.resize_token_embeddings(len(tokenizer))
