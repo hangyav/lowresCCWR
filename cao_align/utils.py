@@ -145,24 +145,33 @@ class DataCollatorForCaoAlignment:
                 return i
         return -1
 
+    def get_eval(self):
+        return self
+
 
 class DataCollatorForCaoMLMAlignment(DataCollatorForCaoAlignment):
 
     tokenizer: PreTrainedTokenizerBase
     max_length: int
     include_clssep: bool
+    eval_mode: bool
 
     def __init__(self, tokenizer, max_length, include_clssep,
-                 mlm_probability=0.15, pad_to_multiple_of_8=False):
+                 mlm_probability=0.15, pad_to_multiple_of_8=False,
+                 eval_mode=False):
         super().__init__(tokenizer, max_length, include_clssep)
         self.mlm_collator = DataCollatorForLanguageModeling(
             tokenizer=tokenizer,
             mlm_probability=mlm_probability,
             pad_to_multiple_of=8 if pad_to_multiple_of_8 else None,
         )
+        self.eval_mode = eval_mode
 
     def __call__(self, examples) -> Dict[str, torch.Tensor]:
         output = super().__call__(examples)
+
+        if self.eval_mode:
+            return output
 
         for prefix in ['src', 'trg']:
             input_ids = output[f'{prefix}_input_ids']
@@ -177,6 +186,17 @@ class DataCollatorForCaoMLMAlignment(DataCollatorForCaoAlignment):
             output[f'{prefix}_mlm_labels'] = labels
 
         return output
+
+    def get_eval(self):
+        return DataCollatorForCaoMLMAlignment(
+            self.tokenizer,
+            self.max_length,
+            self.include_clssep,
+            self.mlm_collator.mlm_probability,
+            self.mlm_collator.pad_to_multiple_of,
+            True,
+        )
+
 
 class MultiDataset(Sized):
 

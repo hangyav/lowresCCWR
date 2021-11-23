@@ -428,6 +428,7 @@ class CaoTrainer(Trainer):
                 self.args.train_batch_size,
                 self.args.per_device_train_batch_size,
                 'training',
+                False,
         )
 
     def get_eval_dataloader(
@@ -442,6 +443,7 @@ class CaoTrainer(Trainer):
                 self.args.eval_batch_size,
                 self.args.per_device_eval_batch_size,
                 'evaluation',
+                True,
         )
 
     def get_test_dataloader(
@@ -452,14 +454,15 @@ class CaoTrainer(Trainer):
                 self.args.eval_batch_size,
                 self.args.per_device_eval_batch_size,
                 'test',
+                True,
         )
 
     def _get_data_loader(self, datasets, batch_size, per_device_batch_size,
-                         description):
+                         description, eval=False):
         data_loaders = [
             self._get_single_dataloader(d,
                                         batch_size, per_device_batch_size,
-                                        description
+                                        description, eval,
                                         )
             for d in datasets.datasets.values()
         ]
@@ -474,7 +477,8 @@ class CaoTrainer(Trainer):
         )
 
     def _get_single_dataloader(self, dataset, batch_size,
-                               per_device_batch_size, description) -> DataLoader:
+                               per_device_batch_size, description,
+                               eval=False) -> DataLoader:
 
         if is_datasets_available() and isinstance(dataset, Dataset):
             dataset = self._remove_unused_columns(dataset, description=description)
@@ -492,7 +496,8 @@ class CaoTrainer(Trainer):
             return DataLoader(
                 dataset,
                 batch_size=batch_size,
-                collate_fn=self.data_collator,
+                #  collate_fn=self.data_collator,
+                collate_fn=self.data_collator.get_eval() if eval else self.data_collator,
                 num_workers=self.args.dataloader_num_workers,
                 pin_memory=self.args.dataloader_pin_memory,
             )
@@ -515,7 +520,8 @@ class CaoTrainer(Trainer):
         return DataLoader(
             dataset,
             batch_size=batch_size,
-            collate_fn=self.data_collator,
+            #  collate_fn=self.data_collator,
+            collate_fn=self.data_collator.get_eval() if eval else self.data_collator,
             num_workers=self.args.dataloader_num_workers,
             pin_memory=self.args.dataloader_pin_memory,
         )
@@ -644,7 +650,6 @@ class CaoTrainer(Trainer):
         ignore_keys: Optional[List[str]] = None,
         metric_key_prefix: str = "eval",
     ) -> Dict[str, float]:
-        #  self.bert_base = self.bert_base.to('cpu')
         model_training = self.model.training
         self.model.eval()
         self.bert_base = self.bert_base.cpu()
@@ -729,6 +734,9 @@ class CaoTrainer(Trainer):
             ann_2 = ann_2.to(self.model.device)
             src_alignments = torch.tensor(src_alignments, dtype=int).to(self.model.device)
             trg_alignments = torch.tensor(trg_alignments, dtype=int).to(self.model.device)
+            del input
+            del output
+            torch.cuda.empty_cache()
             pbar.update(1)
 
             for k, v in self._evaluate_retrival_context(
