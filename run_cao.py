@@ -54,6 +54,7 @@ from cao_align.utils import (
     DataCollatorForCaoAlignment,
     MultiDataset,
     DataCollatorForCaoMLMAlignment,
+    tokenize_function_for_parallel,
 )
 from cao_align.cao_model import BertForCaoAlign, BertForCaoAlignMLM
 from cao_align.cao_model import CaoTrainer
@@ -213,67 +214,6 @@ class MyTrainingArguments(TrainingArguments):
     do_test: bool = field(default=False, metadata={"help": "Whether to run eval on the test set."})
 
 
-def tokenize_function_per_input(tokenizer, examples):
-    # this contains the subword token ids
-    input_ids_lst = list()
-    # contains lists of input_ids indices to show which subword tokens
-    # belong to which words
-    word_ids_lst_lst = list()
-    # contains 1 if special token like SEP or CLS and o otherwise
-    special_word_masks_lst = list()
-
-    for example in examples:
-        input_ids = list()
-        word_ids_lst = list()
-        special_word_masks = list()
-
-        input_ids.append(tokenizer.convert_tokens_to_ids(tokenizer.cls_token))
-        word_ids_lst.append([0])
-        special_word_masks.append(1)
-
-        for word in example.split():
-            ids = tokenizer.convert_tokens_to_ids(
-                tokenizer.tokenize(word)
-            )
-            assert len(ids) > 0
-            cur_len = len(input_ids)
-            ids_len = len(ids)
-            input_ids.extend(ids)
-
-            word_ids_lst.append(list(range(cur_len, cur_len+ids_len)))
-
-            special_word_masks.extend([0]*len(ids))
-
-        word_ids_lst.append([len(input_ids)])
-        input_ids.append(tokenizer.convert_tokens_to_ids(tokenizer.sep_token))
-        special_word_masks.append(1)
-
-        input_ids_lst.append(input_ids)
-        word_ids_lst_lst.append(word_ids_lst)
-        special_word_masks_lst.append(special_word_masks)
-
-    result = {
-        'input_ids': input_ids_lst,
-        'word_ids_lst': word_ids_lst_lst,
-        'special_word_masks': special_word_masks_lst,
-    }
-    return result
-
-
-def tokenize_function(tokenizer, examples):
-    src = tokenize_function_per_input(tokenizer, examples['source'])
-    trg = tokenize_function_per_input(tokenizer, examples['target'])
-    return {
-        'src_input_ids': src['input_ids'],
-        'src_word_ids_lst': src['word_ids_lst'],
-        'src_special_word_masks': src['special_word_masks'],
-        'trg_input_ids': trg['input_ids'],
-        'trg_word_ids_lst': trg['word_ids_lst'],
-        'trg_special_word_masks': trg['special_word_masks'],
-        'alignment': examples['alignment'],
-    }
-
-
 def get_datasets(data_args, model_args, training_args, tokenizer, model):
     # Downloading and loading a dataset
     #  raw_datasets = load_dataset(
@@ -329,7 +269,7 @@ def get_datasets(data_args, model_args, training_args, tokenizer, model):
     with training_args.main_process_first(desc="dataset map tokenization"):
         tokenized_datasets = {
             k: v.map(
-                partial(tokenize_function, tokenizer),
+                partial(tokenize_function_for_parallel, tokenizer),
                 batched=True,
                 num_proc=data_args.preprocessing_num_workers,
                 remove_columns=column_names,

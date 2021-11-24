@@ -7,11 +7,69 @@ from transformers.data.data_collator import DataCollatorForLanguageModeling
 
 
 @dataclass
-class DataCollatorForCaoAlignment:
+class DataCollatorForUnlabeledData:
 
     tokenizer: PreTrainedTokenizerBase
     max_length: int
     include_clssep: bool
+
+    def __call__(self, examples) -> Dict[str, torch.Tensor]:
+        max_len = max([len(item['input_ids']) for item in examples])
+
+        input_ids = self._handle_input_ids(
+                examples,
+                'input_ids',
+                max_len,
+                self.tokenizer.pad_token_id,
+        )
+
+        special_word_masks = self._handle_special_word_masks(
+                examples,
+                'special_word_masks',
+                input_ids,
+        )
+
+        attention_masks = (special_word_masks != 2).type(torch.IntTensor)
+        word_ids_lst = self._to_list(examples, 'word_ids_lst')
+
+        return {
+            'input_ids': input_ids,
+            'attention_masks': attention_masks,
+            'word_ids_lst': word_ids_lst,
+            'special_word_masks': special_word_masks,
+        }
+
+    def _handle_input_ids(self, examples, col, max_len, default_value):
+        input_ids = torch.zeros((len(examples), max_len), dtype=int)
+        input_ids = input_ids.fill_(default_value)
+
+        for i, example in enumerate(examples):
+            input_ids[i, :len(example[col])] = torch.tensor(example[col], dtype=int)
+
+        return input_ids
+
+    def _handle_special_word_masks(self, examples, col, input_ids):
+        special_word_masks = torch.zeros_like(input_ids).fill_(2)
+
+        for i, example in enumerate(examples):
+            special_word_masks[i, :len(example[col])] = torch.tensor(
+                example[col],
+                dtype=int
+            )
+
+        return special_word_masks
+
+    def _to_list(self, examples, col):
+        return [example[col] for example in examples]
+
+    def get_eval(self):
+        return self
+
+
+class DataCollatorForCaoAlignment(DataCollatorForUnlabeledData):
+
+    def __init__(self, tokenizer, max_length, include_clssep):
+        super().__init__(tokenizer, max_length, include_clssep)
 
     def __call__(self, examples) -> Dict[str, torch.Tensor]:
         max_src_len = max([len(item['src_input_ids']) for item in examples])
@@ -70,26 +128,6 @@ class DataCollatorForCaoAlignment:
             'trg_alignments': trg_idxs,
         }
 
-    def _handle_input_ids(self, examples, col, max_len, default_value):
-        input_ids = torch.zeros((len(examples), max_len), dtype=int)
-        input_ids = input_ids.fill_(default_value)
-
-        for i, example in enumerate(examples):
-            input_ids[i, :len(example[col])] = torch.tensor(example[col], dtype=int)
-
-        return input_ids
-
-    def _handle_special_word_masks(self, examples, col, input_ids):
-        special_word_masks = torch.zeros_like(input_ids).fill_(2)
-
-        for i, example in enumerate(examples):
-            special_word_masks[i, :len(example[col])] = torch.tensor(example[col], dtype=int)
-
-        return special_word_masks
-
-    def _to_list(self, examples, col):
-        return [example[col] for example in examples]
-
     @staticmethod
     def get_aligned_indices(alignment_lsts, include_clssep,
                             src_special_word_masks=None,
@@ -145,15 +183,9 @@ class DataCollatorForCaoAlignment:
                 return i
         return -1
 
-    def get_eval(self):
-        return self
-
 
 class DataCollatorForCaoMLMAlignment(DataCollatorForCaoAlignment):
 
-    tokenizer: PreTrainedTokenizerBase
-    max_length: int
-    include_clssep: bool
     eval_mode: bool
 
     def __init__(self, tokenizer, max_length, include_clssep,
@@ -261,3 +293,74 @@ def detokenize(input_ids, tokenizer):
     for ids in input_ids:
         res.append(detokenize_sentence(ids, tokenizer))
     return res
+
+def normalize_matrix(vecs):
+    norm = torch.linalg.norm(vecs)
+    norm[norm < 1e-5] = 1
+    normalized = vecs / norm
+    return normalized
+
+
+def tokenize_function_per_input(tokenizer, examples):
+    # this contains the subword token ids
+    input_ids_lst = list()
+    # contains lists of input_ids indices to show which subword tokens
+    # belong to which words
+    word_ids_lst_lst = list()
+    # contains 1 if special token like SEP or CLS and o otherwise
+    special_word_masks_lst = list()
+
+    for example in examples:
+        input_ids = list()
+        word_ids_lst = list()
+        special_word_masks = list()
+
+        input_ids.append(tokenizer.convert_tokens_to_ids(tokenizer.cls_token))
+        word_ids_lst.append([0])
+        special_word_masks.append(1)
+
+        for word in example.split():
+            ids = tokenizer.convert_tokens_to_ids(
+                tokenizer.tokenize(word)
+            )
+            assert len(ids) > 0
+            cur_len = len(input_ids)
+            ids_len = len(ids)
+            input_ids.extend(ids)
+
+            word_ids_lst.append(list(range(cur_len, cur_len+ids_len)))
+
+            special_word_masks.extend([0]*len(ids))
+
+        word_ids_lst.append([len(input_ids)])
+        input_ids.append(tokenizer.convert_tokens_to_ids(tokenizer.sep_token))
+        special_word_masks.append(1)
+
+        input_ids_lst.append(input_ids)
+        word_ids_lst_lst.append(word_ids_lst)
+        special_word_masks_lst.append(special_word_masks)
+
+    result = {
+        'input_ids': input_ids_lst,
+        'word_ids_lst': word_ids_lst_lst,
+        'special_word_masks': special_word_masks_lst,
+    }
+    return result
+
+
+def tokenize_function_for_parallel(tokenizer, examples):
+    src = tokenize_function_per_input(tokenizer, examples['source'])
+    trg = tokenize_function_per_input(tokenizer, examples['target'])
+    return {
+        'src_input_ids': src['input_ids'],
+        'src_word_ids_lst': src['word_ids_lst'],
+        'src_special_word_masks': src['special_word_masks'],
+        'trg_input_ids': trg['input_ids'],
+        'trg_word_ids_lst': trg['word_ids_lst'],
+        'trg_special_word_masks': trg['special_word_masks'],
+        'alignment': examples['alignment'],
+    }
+
+
+def tokenize_function_for_unlabeled(tokenizer, examples):
+    return tokenize_function_per_input(tokenizer, examples['text'])

@@ -37,7 +37,12 @@ from transformers.trainer_pt_utils import (
 )
 
 from cao_align.multilingual_alignment import hubness_CSLS, bestk_idx_CSLS
-from cao_align.utils import MultiDataLoader, cat_tensors_with_padding, detokenize
+from cao_align.utils import (
+    MultiDataLoader,
+    cat_tensors_with_padding,
+    detokenize,
+    DataCollatorForUnlabeledData,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +148,84 @@ class BertForCaoAlign(BertPreTrainedModel):
         )
 
         return features
+
+    def mine_word_pairs(self, src_data, trg_data, threshold, data_collator,
+                        k=1, batch_size=32, num_data_processes=1):
+        """
+        output: [(src_sentence_idx, src_word_idx, trg_sentence_idx, trg_word_idx)]
+        """
+        res = list()
+        src_batch_offset = 0
+        src_data_loader = DataLoader(
+            src_data,
+            batch_size=batch_size,
+            collate_fn=data_collator,
+            num_workers=num_data_processes,
+        )
+        for src_batch in tqdm(src_data_loader, desc='Mining'):
+            src_batch_features = self._process_sentences(
+                    src_batch['input_ids'],
+                    src_batch['attention_masks'],
+                    src_batch['word_ids_lst'],
+                    src_batch['special_word_masks'],
+                    False,
+                    self.bert,
+            )
+            batch_res = dict()
+            trg_data_loader = DataLoader(
+                trg_data,
+                batch_size=batch_size,
+                collate_fn=data_collator,
+                num_workers=num_data_processes,
+            )
+            trg_batch_offset = 0
+            for trg_batch in trg_data_loader:
+                trg_batch_features = self._process_sentences(
+                        trg_batch['input_ids'],
+                        trg_batch['attention_masks'],
+                        trg_batch['word_ids_lst'],
+                        trg_batch['special_word_masks'],
+                        False,
+                        self.bert,
+                )
+
+                for src_sent_idx, (src_sent_feats, src_batch_item) in enumerate(
+                        zip(src_batch_features, src_batch)
+                ):
+                    for src_word_idx, src_word_emb in enumerate(src_sent_feats):
+                        if src_word_emb.sum().item() == 0.0:
+                            # padded word
+                            continue
+
+                        # size: trg_sents x trg_max_words (padded)
+                        similarities = F.cosine_similarity(
+                            src_word_emb, trg_batch_features, dim=-1)
+
+                        for i in range(similarities.shape[0]):
+                            for j in range(similarities.shape[1]):
+                                # padding should not get mined
+                                # and higher sim than threshold
+                                if (trg_batch_features[i][j].sum().item() != 0.0
+                                        and similarities[i][j] >= threshold):
+                                    batch_res.setdefault(
+                                        (src_sent_idx+src_batch_offset, src_word_idx),
+                                        list()
+                                    ).append((
+                                        i+trg_batch_offset,
+                                        j,
+                                        similarities[i][j],
+                                    ))
+
+                trg_batch_offset += trg_data_loader.batch_size
+
+            for key, v in batch_res.items():
+                v = list(sorted(v, key=lambda x: x[2], reverse=True))[:k]
+                for item in v:
+                    res.append((key[0], key[1], item[0], item[1]))
+
+            src_batch_offset += src_data_loader.batch_size
+
+        return list(sorted(res))
 
 
 class BertForCaoAlignMLM(BertForCaoAlign):

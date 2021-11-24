@@ -61,7 +61,7 @@ def align_mlm_bert():
 ])
 def test_tokenize_function_per_input(examples, expected,
                                      tokenizer_bert_multilingual_cased):
-    output = rc.tokenize_function_per_input(tokenizer_bert_multilingual_cased,
+    output = cu.tokenize_function_per_input(tokenizer_bert_multilingual_cased,
                                             examples)
     assert [
             tokenizer_bert_multilingual_cased.convert_ids_to_tokens(ids)
@@ -259,7 +259,7 @@ def test_pipeline(examples, expected, equals,
     )
     dataset = Dataset.from_dict(examples)
     dataset = dataset.map(
-        partial(rc.tokenize_function, tokenizer_bert_multilingual_cased),
+        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased),
         batched=True,
         num_proc=1,
         remove_columns=dataset.column_names,
@@ -326,7 +326,7 @@ def test_trainer(train, eval,
     )
     train_dataset = Dataset.from_dict(train)
     train_dataset = train_dataset.map(
-        partial(rc.tokenize_function, tokenizer_bert_multilingual_cased),
+        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased),
         batched=True,
         num_proc=1,
         remove_columns=train_dataset.column_names,
@@ -336,7 +336,7 @@ def test_trainer(train, eval,
     train_dataset = cu.MultiDataset({'test': train_dataset})
     eval_dataset = Dataset.from_dict(eval)
     eval_dataset = eval_dataset.map(
-        partial(rc.tokenize_function, tokenizer_bert_multilingual_cased),
+        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased),
         batched=True,
         num_proc=1,
         remove_columns=eval_dataset.column_names,
@@ -410,7 +410,7 @@ def test_trainer_mlm(train, eval,
     )
     train_dataset = Dataset.from_dict(train)
     train_dataset = train_dataset.map(
-        partial(rc.tokenize_function, tokenizer_bert_multilingual_cased),
+        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased),
         batched=True,
         num_proc=1,
         remove_columns=train_dataset.column_names,
@@ -420,7 +420,7 @@ def test_trainer_mlm(train, eval,
     train_dataset = cu.MultiDataset({'test': train_dataset})
     eval_dataset = Dataset.from_dict(eval)
     eval_dataset = eval_dataset.map(
-        partial(rc.tokenize_function, tokenizer_bert_multilingual_cased),
+        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased),
         batched=True,
         num_proc=1,
         remove_columns=eval_dataset.column_names,
@@ -539,7 +539,7 @@ def test_mlm_pipeline(examples, expected, equals,
     )
     dataset = Dataset.from_dict(examples)
     dataset = dataset.map(
-        partial(rc.tokenize_function, tokenizer_bert_multilingual_cased),
+        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased),
         batched=True,
         num_proc=1,
         remove_columns=dataset.column_names,
@@ -596,5 +596,87 @@ def test_detokenize(examples, expected, tokenizer_bert_multilingual_cased):
         tokenizer_bert_multilingual_cased(examples)['input_ids'],
         tokenizer_bert_multilingual_cased,
     )
+
+    assert output == expected
+
+
+@pytest.mark.parametrize('src,trg,threshold,k,expected', [
+    (
+        {
+            'text': [
+                'I like beer .',
+                'Du learnst Deutsch .',
+                'I like beer .',
+                'ThisTokenIsSplit to BPEs'
+            ],
+        },
+        {
+            'text': [
+                'I like beer .',
+                'Du learnst Deutsch .',
+                'ThisTokenIsSplit to BPEs'
+            ],
+        },
+        0.0,
+        1,
+        [
+            (0, 0, 0, 0), (0, 1, 0, 1), (0, 2, 0, 2), (0, 3, 0, 3),
+            (1, 0, 1, 0), (1, 1, 1, 1), (1, 2, 1, 2), (1, 3, 1, 3),
+            (2, 0, 0, 0), (2, 1, 0, 1), (2, 2, 0, 2), (2, 3, 0, 3),
+            (3, 0, 2, 0), (3, 1, 2, 1), (3, 2, 2, 2),
+        ],
+    ),
+    (
+        {
+            'text': [
+                'Apfel'
+            ],
+        },
+        {
+            'text': [
+                'This is a dummy sentence',
+                'This is a dummy sentence',
+                'This is a dummy sentence',
+                'This is a dummy sentence',
+                'Der ist ein Apfel',
+                'This is a dummy sentence',
+                'Apfel ist der beste',
+            ],
+        },
+        0.6,
+        2,
+        [
+            (0, 0, 4, 3), (0, 0, 6, 0),
+        ],
+    ),
+])
+def test_mining(src, trg, threshold, k, expected,
+                align_bert, tokenizer_bert_multilingual_cased):
+    collator = cu.DataCollatorForUnlabeledData(
+        tokenizer=tokenizer_bert_multilingual_cased,
+        max_length=align_bert.bert.embeddings.position_embeddings.num_embeddings,
+        include_clssep=False,
+    )
+    src_dataset = Dataset.from_dict(src)
+    src_dataset = src_dataset.map(
+        partial(cu.tokenize_function_for_unlabeled, tokenizer_bert_multilingual_cased),
+        batched=True,
+        num_proc=1,
+        remove_columns=src_dataset.column_names,
+        load_from_cache_file=False,
+        desc="Running tokenizer on every text in dataset",
+    )
+    trg_dataset = Dataset.from_dict(trg)
+    trg_dataset = trg_dataset.map(
+        partial(cu.tokenize_function_for_unlabeled, tokenizer_bert_multilingual_cased),
+        batched=True,
+        num_proc=1,
+        remove_columns=trg_dataset.column_names,
+        load_from_cache_file=False,
+        desc="Running tokenizer on every text in dataset",
+    )
+
+    output = align_bert.mine_word_pairs(src_dataset, trg_dataset, threshold,
+                                        collator, k=k, batch_size=1)
 
     assert output == expected
