@@ -294,11 +294,27 @@ def detokenize(input_ids, tokenizer):
         res.append(detokenize_sentence(ids, tokenizer))
     return res
 
-def normalize_matrix(vecs):
-    norm = torch.linalg.norm(vecs)
-    norm[norm < 1e-5] = 1
-    normalized = vecs / norm
-    return normalized
+
+def normalize_matrix(mat, dim=-1):
+    norm = mat.norm(dim=-1, keepdim=True)
+    norm[norm < 1e-5] = 1.0
+    return mat / norm
+
+
+def sentence_batch_cosine_similarity(sentence, batch):
+    """
+    Embeddings of a sentence: num_sent_words x emb_dim
+    Embeddings in a batch: num_batch_sentences x num_batch_words x emb_dim
+
+    output: num_batch_sentences x num_sent_words x num_batch_words
+    """
+    sentence = normalize_matrix(sentence)
+    batch = normalize_matrix(batch)
+
+    res = sentence.matmul(batch.transpose(1, 2))
+    # Zero vectors (PAD) give nan values, set them to 0.0
+    res = res.nan_to_num()
+    return res
 
 
 def tokenize_function_per_input(tokenizer, examples):

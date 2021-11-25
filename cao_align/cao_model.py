@@ -42,6 +42,7 @@ from cao_align.utils import (
     cat_tensors_with_padding,
     detokenize,
     DataCollatorForUnlabeledData,
+    sentence_batch_cosine_similarity,
 )
 
 logger = logging.getLogger(__name__)
@@ -150,7 +151,7 @@ class BertForCaoAlign(BertPreTrainedModel):
         return features
 
     def mine_word_pairs(self, src_data, trg_data, threshold, data_collator,
-                        k=1, batch_size=32, num_data_processes=1):
+                        k=1, batch_size=16):
         """
         output: [(src_sentence_idx, src_word_idx, trg_sentence_idx, trg_word_idx)]
         """
@@ -160,14 +161,13 @@ class BertForCaoAlign(BertPreTrainedModel):
             src_data,
             batch_size=batch_size,
             collate_fn=data_collator,
-            num_workers=num_data_processes,
         )
         for src_batch in tqdm(src_data_loader, desc='Mining'):
             src_batch_features = self._process_sentences(
-                    src_batch['input_ids'],
-                    src_batch['attention_masks'],
+                    src_batch['input_ids'].to(self.bert.device),
+                    src_batch['attention_masks'].to(self.bert.device),
                     src_batch['word_ids_lst'],
-                    src_batch['special_word_masks'],
+                    src_batch['special_word_masks'].to(self.bert.device),
                     False,
                     self.bert,
             )
@@ -176,15 +176,14 @@ class BertForCaoAlign(BertPreTrainedModel):
                 trg_data,
                 batch_size=batch_size,
                 collate_fn=data_collator,
-                num_workers=num_data_processes,
             )
             trg_batch_offset = 0
             for trg_batch in trg_data_loader:
                 trg_batch_features = self._process_sentences(
-                        trg_batch['input_ids'],
-                        trg_batch['attention_masks'],
+                        trg_batch['input_ids'].to(self.bert.device),
+                        trg_batch['attention_masks'].to(self.bert.device),
                         trg_batch['word_ids_lst'],
-                        trg_batch['special_word_masks'],
+                        trg_batch['special_word_masks'].to(self.bert.device),
                         False,
                         self.bert,
                 )
@@ -192,29 +191,36 @@ class BertForCaoAlign(BertPreTrainedModel):
                 for src_sent_idx, (src_sent_feats, src_batch_item) in enumerate(
                         zip(src_batch_features, src_batch)
                 ):
-                    for src_word_idx, src_word_emb in enumerate(src_sent_feats):
-                        if src_word_emb.sum().item() == 0.0:
-                            # padded word
-                            continue
+                    # TODO can we eliminate the loop above?
+                    similarities = sentence_batch_cosine_similarity(
+                        src_sent_feats,
+                        trg_batch_features,
+                    )
+                    similarities[similarities < threshold] = 0.0
 
-                        # size: trg_sents x trg_max_words (padded)
-                        similarities = F.cosine_similarity(
-                            src_word_emb, trg_batch_features, dim=-1)
+                    #  zero out elements which belong to a src or trg token
+                    #  which is a PAD
+                    #  XXX below is buggy/not finished. But we don't need it
+                    #  actually, they don't get mined since cos of zero vector
+                    #  is low
+                    #  src_non_pad_indices = src_sent_feats.sum(dim=-1) != 0.0
+                    #  similarities[:, src_non_pad_indices, :] = 0.0
+                    #  trg_non_pad_indices = trg_batch_features.sum(dim=-1) != 0.0
+                    #  similarities[trg_non_pad_indices.unsqueeze(
+                    #      1).repeat(1, similarities.shape[1], 1)] = 0.0
 
-                        for i in range(similarities.shape[0]):
-                            for j in range(similarities.shape[1]):
-                                # padding should not get mined
-                                # and higher sim than threshold
-                                if (trg_batch_features[i][j].sum().item() != 0.0
-                                        and similarities[i][j] >= threshold):
-                                    batch_res.setdefault(
-                                        (src_sent_idx+src_batch_offset, src_word_idx),
-                                        list()
-                                    ).append((
-                                        i+trg_batch_offset,
-                                        j,
-                                        similarities[i][j],
-                                    ))
+                    for index in similarities.nonzero():
+                        # index[0]: trg_sent_idx
+                        # index[1]: src_word_idx
+                        # index[2]: trg_word_idx
+                        batch_res.setdefault(
+                            (src_sent_idx+src_batch_offset, index[1].item()),
+                            list()
+                        ).append((
+                            index[0]+trg_batch_offset,
+                            index[2].item(),
+                            similarities[index[0], index[1], index[2]].item(),
+                        ))
 
                 trg_batch_offset += trg_data_loader.batch_size
 
