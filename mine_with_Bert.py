@@ -77,6 +77,12 @@ class ModelArguments:
         default=True,
         metadata={"help": "Whether to use one of the fast tokenizer (backed by the tokenizers library) or not."},
     )
+    device: str = field(
+        default='cuda:0',
+        metadata={
+            "help": "cpu, cuda:0, etc"
+        },
+    )
 
 
 @dataclass
@@ -151,7 +157,7 @@ def main():
     )
 
     model.resize_token_embeddings(len(tokenizer))
-    model = model.to('cuda:0')
+    model = model.to(model_args.device)
     model.eval()
 
     src_dataset = load_dataset(
