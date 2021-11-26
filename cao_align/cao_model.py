@@ -231,7 +231,7 @@ class BertForCaoAlign(BertPreTrainedModel):
 
             src_batch_offset += src_data_loader.batch_size
 
-        return list(sorted(res))
+        return list(sorted(res, key=lambda x: (x[0], x[2], x[1], x[3])))
 
 
 class BertForCaoAlignMLM(BertForCaoAlign):
