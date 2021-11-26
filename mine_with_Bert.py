@@ -97,6 +97,9 @@ class DataTrainingArguments:
     trg_dataset_path: str = field(
         metadata={"help": "The path of the target dataset to use."}
     )
+    output: str = field(
+        metadata={"help": "Path to save mined word pairs"}
+    )
     overwrite_cache: bool = field(
         default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
     )
@@ -207,7 +210,7 @@ def main():
         batch_size=model_args.batch_size,
     )
 
-    def _process(align_lst, src_dataset, trg_dataset):
+    def _process(align_lst, src_dataset, trg_dataset, output):
         if align_lst is None or len(align_lst) == 0:
             return
 
@@ -216,26 +219,31 @@ def main():
         src_sent = src_dataset['text'][src_sent_id]
         trg_sent = trg_dataset['text'][trg_sent_id]
         alignments = [f'{align[1]}-{align[3]}' for align in align_lst]
+        scores = [f'{align[4]}' for align in align_lst]
 
-        print('{} ||| {} ||| {}'.format(
+        print('{} ||| {} ||| {} ||| {}'.format(
             src_sent,
             trg_sent,
             ' '.join(alignments),
-        ))
+            ' '.join(scores),
+        ),
+            file=output
+        )
 
-    tmp_lst = None
-    last_sent_pair = None
-    for item in output:
-        curr_sent_pair = (item[0], item[2])
+    with open(data_args.output, 'w') as fout:
+        tmp_lst = None
+        last_sent_pair = None
+        for item in output:
+            curr_sent_pair = (item[0], item[2])
 
-        if last_sent_pair != curr_sent_pair:
-            _process(tmp_lst, src_dataset, trg_dataset)
-            tmp_lst = list()
-            last_sent_pair = curr_sent_pair
+            if last_sent_pair != curr_sent_pair:
+                _process(tmp_lst, src_dataset, trg_dataset, fout)
+                tmp_lst = list()
+                last_sent_pair = curr_sent_pair
 
-        tmp_lst.append(item)
+            tmp_lst.append(item)
 
-    _process(tmp_lst, src_dataset, trg_dataset)
+        _process(tmp_lst, src_dataset, trg_dataset, fout)
 
 
 def _mp_fn(index):

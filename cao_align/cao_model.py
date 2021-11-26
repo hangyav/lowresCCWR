@@ -217,7 +217,7 @@ class BertForCaoAlign(BertPreTrainedModel):
                             (src_sent_idx+src_batch_offset, index[1].item()),
                             list()
                         ).append((
-                            index[0]+trg_batch_offset,
+                            index[0].item()+trg_batch_offset,
                             index[2].item(),
                             similarities[index[0], index[1], index[2]].item(),
                         ))
@@ -227,7 +227,7 @@ class BertForCaoAlign(BertPreTrainedModel):
             for key, v in batch_res.items():
                 v = list(sorted(v, key=lambda x: x[2], reverse=True))[:k]
                 for item in v:
-                    res.append((key[0], key[1], item[0], item[1]))
+                    res.append((key[0], key[1], item[0], item[1], item[2]))
 
             src_batch_offset += src_data_loader.batch_size
 

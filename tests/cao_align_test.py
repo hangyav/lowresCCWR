@@ -678,5 +678,7 @@ def test_mining(src, trg, threshold, k, expected,
 
     output = align_bert.mine_word_pairs(src_dataset, trg_dataset, threshold,
                                         collator, k=k, batch_size=1)
+    output_idxs = [item[:4] for item in output]
 
-    assert output == expected
+    assert output_idxs == expected
+    assert all([item[4] is not None for item in output])
