@@ -1,9 +1,16 @@
 from collections.abc import Sized
-import torch
-from dataclasses import dataclass
+from functools import partial
 from typing import Dict
+
+import torch
+from torch.utils.data.dataloader import DataLoader
+
+from dataclasses import dataclass
+
 from transformers import PreTrainedTokenizerBase
 from transformers.data.data_collator import DataCollatorForLanguageModeling
+
+from datasets import Dataset
 
 
 @dataclass
@@ -262,6 +269,114 @@ class MultiDataLoader(Sized):
                 iters.remove(it)
             if len(iters) == 0:
                 return
+
+
+class MiningDataLoader():
+
+    def __init__(self, src_dataset, trg_dataset, batch_size, model, tokenizer,
+                 threshold, parallel_collator, k=1, mine_batch_size=None,
+                 dataloader_num_workers=0, dataloader_pin_memory=True):
+        self.src_dataset = src_dataset
+        self.trg_dataset = trg_dataset
+        self.batch_size = batch_size
+        self.model = model
+        self.tokenizer = tokenizer
+        self.threshold = threshold
+        self.parallel_collator = parallel_collator
+        self.k = k
+        self.mine_batch_size = mine_batch_size if mine_batch_size else batch_size
+        self.dataloader_pin_memory = dataloader_pin_memory
+        self.dataloader_num_workers = dataloader_num_workers
+
+        self._unlabeled_collator = DataCollatorForUnlabeledData(
+            tokenizer=tokenizer,
+            max_length=model.bert.embeddings.position_embeddings.num_embeddings,
+            include_clssep=False,
+        )
+
+        self._tokenized_src_dataset = self._tokenize_dataset(
+            src_dataset,
+            tokenize_function_for_unlabeled,
+        )
+        self._tokenized_trg_dataset = self._tokenize_dataset(
+            trg_dataset,
+            tokenize_function_for_unlabeled,
+        )
+
+    def _tokenize_dataset(self, dataset, tok_fv):
+        return dataset.map(
+            partial(tok_fv, self.tokenizer),
+            batched=True,
+            num_proc=self.dataloader_num_workers if self.dataloader_num_workers else 1,
+            remove_columns=dataset.column_names,
+            load_from_cache_file=False,
+        )
+
+    def _mine(self):
+        model_training = self.model.training
+        self.model.eval()
+
+        with torch.no_grad():
+            mining = self.model.mine_intersection_word_pairs(
+                self._tokenized_src_dataset,
+                self._tokenized_trg_dataset,
+                self.threshold,
+                self._unlabeled_collator,
+                k=self.k,
+                batch_size=self.mine_batch_size,
+            )
+
+        if model_training:
+            self.model.train()
+
+        tmp_lst = None
+        last_sent_pair = None
+        res = dict()
+        for item in mining:
+            curr_sent_pair = (item[0], item[2])
+
+            if last_sent_pair != curr_sent_pair:
+                self._process(tmp_lst, self.src_dataset, self.trg_dataset, res)
+                tmp_lst = list()
+                last_sent_pair = curr_sent_pair
+
+            tmp_lst.append(item)
+
+        self._process(tmp_lst, self.src_dataset, self.trg_dataset, res)
+
+        return Dataset.from_dict(res)
+
+    def _process(self, align_lst, src_dataset, trg_dataset, out_dict):
+        if align_lst is None or len(align_lst) == 0:
+            return
+
+        src_sent_id = align_lst[0][0]
+        trg_sent_id = align_lst[0][2]
+        src_sent = src_dataset['text'][src_sent_id]
+        trg_sent = trg_dataset['text'][trg_sent_id]
+        alignments = [[align[1], align[3]] for align in align_lst]
+
+        out_dict.setdefault('source', list()).append(src_sent)
+        out_dict.setdefault('target', list()).append(trg_sent)
+        out_dict.setdefault('alignment', list()).append(alignments)
+
+    def _get_data_loader(self):
+        dataset = self._mine()
+        dataset = self._tokenize_dataset(
+            dataset,
+            tokenize_function_for_parallel
+        )
+
+        return DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            collate_fn=self.parallel_collator,
+            num_workers=self.dataloader_num_workers,
+            pin_memory=self.dataloader_pin_memory,
+        )
+
+    def __iter__(self):
+        return self._get_data_loader().__iter__()
 
 
 def cat_tensors_with_padding(a, b, value=0):

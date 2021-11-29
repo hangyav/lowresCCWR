@@ -766,3 +766,50 @@ def test_intersection_mining(src, trg, threshold, k, expected,
 
     assert output_idxs == expected
     assert all([item[4] is not None for item in output])
+
+
+@pytest.mark.parametrize('src,trg,threshold,k', [
+    (
+        {
+            'text': [
+                'I like beer .',
+                'Du learnst Deutsch .',
+                'I like beer .',
+                'ThisTokenIsSplit to BPEs'
+            ],
+        },
+        {
+            'text': [
+                'I like beer .',
+                'Du learnst Deutsch .',
+                'ThisTokenIsSplit to BPEs'
+            ],
+        },
+        0.0,
+        1,
+    ),
+])
+def test_mining_data_loader(src, trg, threshold, k,
+                            align_bert, tokenizer_bert_multilingual_cased):
+    collator = cu.DataCollatorForCaoAlignment(
+        tokenizer=tokenizer_bert_multilingual_cased,
+        max_length=align_bert.bert.embeddings.position_embeddings.num_embeddings,
+        include_clssep=True,
+    )
+    src_dataset = Dataset.from_dict(src)
+    trg_dataset = Dataset.from_dict(trg)
+
+    data_loader = cu.MiningDataLoader(
+        src_dataset,
+        trg_dataset,
+        1,
+        align_bert,
+        tokenizer_bert_multilingual_cased,
+        threshold,
+        collator,
+        k,
+        1
+    )
+
+    for item in data_loader:
+        pass
