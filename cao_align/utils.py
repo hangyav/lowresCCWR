@@ -339,7 +339,7 @@ def tokenize_function_per_input(tokenizer, examples):
             ids = tokenizer.convert_tokens_to_ids(
                 tokenizer.tokenize(word)
             )
-            assert len(ids) > 0
+            assert len(ids) > 0, f'{word}'
             cur_len = len(input_ids)
             ids_len = len(ids)
             input_ids.extend(ids)

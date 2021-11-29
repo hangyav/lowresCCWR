@@ -65,6 +65,10 @@ class ModelArguments:
     threshold: float = field(
         metadata={"help": "Minimum word pair similarity."},
     )
+    mine_method: str = field(
+        default='intersection',
+        metadata={"help": "{forward, intersection}"},
+    )
     k: int = field(
         default=1,
         metadata={"help": "Top-k pairs to mine for each word token in the source corpus."},
@@ -201,7 +205,13 @@ def main():
         include_clssep=False,
     )
 
-    output = model.mine_word_pairs(
+    mine_fns = {
+        'forward': model.mine_word_pairs,
+        'intersection': model.mine_intersection_word_pairs,
+    }
+    assert model_args.mine_method in mine_fns, f'{model_args.mine_method} is not supported!'
+
+    output = mine_fns[model_args.mine_method](
         src_dataset,
         trg_dataset,
         model_args.threshold,

@@ -682,3 +682,87 @@ def test_mining(src, trg, threshold, k, expected,
 
     assert output_idxs == expected
     assert all([item[4] is not None for item in output])
+
+
+@pytest.mark.parametrize('src,trg,threshold,k,expected', [
+    (
+        {
+            'text': [
+                'I like beer .',
+                'Du learnst Deutsch .',
+                'I like beer .',
+                'ThisTokenIsSplit to BPEs'
+            ],
+        },
+        {
+            'text': [
+                'I like beer .',
+                'Du learnst Deutsch .',
+                'ThisTokenIsSplit to BPEs'
+            ],
+        },
+        0.0,
+        1,
+        [
+            (0, 0, 0, 0), (0, 1, 0, 1), (0, 2, 0, 2), (0, 3, 0, 3),
+            (1, 0, 1, 0), (1, 1, 1, 1), (1, 2, 1, 2), (1, 3, 1, 3),
+            (2, 0, 0, 0), (2, 1, 0, 1), (2, 2, 0, 2), (2, 3, 0, 3),
+            (3, 0, 2, 0), (3, 1, 2, 1), (3, 2, 2, 2),
+        ],
+    ),
+    (
+        {
+            'text': [
+                'Apfel'
+            ],
+        },
+        {
+            'text': [
+                'This is a dummy sentence',
+                'This is a dummy sentence',
+                'This is a dummy sentence',
+                'This is a dummy sentence',
+                'Der ist ein Apfel',
+                'This is a dummy sentence',
+                'Apfel ist der beste',
+            ],
+        },
+        0.6,
+        2,
+        [
+            (0, 0, 4, 3), (0, 0, 6, 0),
+        ],
+    ),
+])
+def test_intersection_mining(src, trg, threshold, k, expected,
+                             align_bert, tokenizer_bert_multilingual_cased):
+    collator = cu.DataCollatorForUnlabeledData(
+        tokenizer=tokenizer_bert_multilingual_cased,
+        max_length=align_bert.bert.embeddings.position_embeddings.num_embeddings,
+        include_clssep=False,
+    )
+    src_dataset = Dataset.from_dict(src)
+    src_dataset = src_dataset.map(
+        partial(cu.tokenize_function_for_unlabeled, tokenizer_bert_multilingual_cased),
+        batched=True,
+        num_proc=1,
+        remove_columns=src_dataset.column_names,
+        load_from_cache_file=False,
+        desc="Running tokenizer on every text in dataset",
+    )
+    trg_dataset = Dataset.from_dict(trg)
+    trg_dataset = trg_dataset.map(
+        partial(cu.tokenize_function_for_unlabeled, tokenizer_bert_multilingual_cased),
+        batched=True,
+        num_proc=1,
+        remove_columns=trg_dataset.column_names,
+        load_from_cache_file=False,
+        desc="Running tokenizer on every text in dataset",
+    )
+
+    output = align_bert.mine_intersection_word_pairs(
+        src_dataset, trg_dataset, threshold, collator, k=k, batch_size=1)
+    output_idxs = [item[:4] for item in output]
+
+    assert output_idxs == expected
+    assert all([item[4] is not None for item in output])

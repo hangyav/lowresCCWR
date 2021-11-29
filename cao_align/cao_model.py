@@ -12,6 +12,7 @@ from torch.nn import functional as F
 from torch.utils.data.dataset import Dataset
 from torch.utils.data.dataloader import DataLoader
 
+from datasets import Dataset as HugDataset
 from transformers import (
     BertPreTrainedModel,
     BertModel,
@@ -41,7 +42,6 @@ from cao_align.utils import (
     MultiDataLoader,
     cat_tensors_with_padding,
     detokenize,
-    DataCollatorForUnlabeledData,
     sentence_batch_cosine_similarity,
 )
 
@@ -232,6 +232,55 @@ class BertForCaoAlign(BertPreTrainedModel):
             src_batch_offset += src_data_loader.batch_size
 
         return list(sorted(res, key=lambda x: (x[0], x[2], x[1], x[3])))
+
+    def mine_intersection_word_pairs(self, src_data, trg_data, threshold,
+                                     data_collator, k=1, batch_size=16):
+        with tqdm(desc='Intersection mining', total=3) as pbar:
+            res = list()
+            forward = self.mine_word_pairs(src_data, trg_data, threshold,
+                                           data_collator, k, batch_size)
+            pbar.update(1)
+
+            forward_dict = dict()
+            for item in forward:
+                forward_dict.setdefault(
+                    item[0],
+                    dict(),
+                ).setdefault(
+                    item[2],
+                    dict(),
+                )[(item[1], item[3])] = item[4]
+            pbar.update(1)
+
+            for src_idx, trg in tqdm(forward_dict.items()):
+                trg_idxs = list(sorted(trg.keys()))
+                src_sent = HugDataset.from_dict(src_data[[src_idx]])
+                trg_sents = HugDataset.from_dict(trg_data[trg_idxs])
+                backward = self.mine_word_pairs(
+                    trg_sents,
+                    src_sent,
+                    threshold,
+                    data_collator,
+                    k,
+                    batch_size
+                )
+
+                for item in backward:
+                    mined_trg_idx = trg_idxs[item[0]]
+                    reverse_mined_word_pair_idxs = (item[3], item[1])
+                    if (mined_trg_idx in forward_dict[src_idx]
+                            and reverse_mined_word_pair_idxs in forward_dict[src_idx][mined_trg_idx]):
+                        res.append((
+                            src_idx,
+                            reverse_mined_word_pair_idxs[0],
+                            mined_trg_idx,
+                            reverse_mined_word_pair_idxs[1],
+                            np.mean([forward_dict[src_idx][mined_trg_idx]
+                                    [reverse_mined_word_pair_idxs], item[4]])
+                        ))
+            pbar.update(1)
+
+            return list(sorted(res, key=lambda x: (x[0], x[2], x[1], x[3])))
 
 
 class BertForCaoAlignMLM(BertForCaoAlign):
