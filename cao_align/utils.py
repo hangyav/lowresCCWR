@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Sized
 from functools import partial
 from typing import Dict
@@ -11,6 +12,8 @@ from transformers import PreTrainedTokenizerBase
 from transformers.data.data_collator import DataCollatorForLanguageModeling
 
 from datasets import Dataset
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -237,24 +240,26 @@ class DataCollatorForCaoMLMAlignment(DataCollatorForCaoAlignment):
         )
 
 
-class MultiDataset(Sized):
+class MultiDataset():
 
     def __init__(self, datasets):
         self.datasets = datasets
+
+
+class SizedMultiDataset(MultiDataset, Sized):
+
+    def __init__(self, datasets):
+        MultiDataset.__init__(self, datasets)
 
     def __len__(self):
         return sum([len(d) for d in self.datasets.values()])
 
 
-class MultiDataLoader(Sized):
+class MultiDataLoader():
 
-    def __init__(self, dataset, data_loaders, batch_size):
+    def __init__(self, dataset, data_loaders):
+        self.dataset = dataset  # needed for some checks in transformer Trainer class
         self.data_loaders = data_loaders
-        self.dataset = dataset
-        self.batch_size = batch_size
-
-    def __len__(self):
-        return round(len(self.dataset) / self.batch_size + 0.5)
 
     def __iter__(self):
         iters = [d.__iter__() for d in self.data_loaders]
@@ -269,6 +274,16 @@ class MultiDataLoader(Sized):
                 iters.remove(it)
             if len(iters) == 0:
                 return
+
+
+class SizedMultiDataLoader(MultiDataLoader, Sized):
+
+    def __init__(self, dataset, data_loaders, batch_size):
+        MultiDataLoader.__init__(self, dataset, data_loaders)
+        self.batch_size = batch_size
+
+    def __len__(self):
+        return round(len(self.dataset) / self.batch_size + 0.5)
 
 
 class MiningDataLoader():
@@ -454,7 +469,10 @@ def tokenize_function_per_input(tokenizer, examples):
             ids = tokenizer.convert_tokens_to_ids(
                 tokenizer.tokenize(word)
             )
-            assert len(ids) > 0, f'{word}'
+            #  assert len(ids) > 0, f'{word}'
+            if len(ids) == 0:
+                logger.warning(f'Zero tokens for word: {word}')
+                continue
             cur_len = len(input_ids)
             ids_len = len(ids)
             input_ids.extend(ids)

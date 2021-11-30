@@ -52,7 +52,7 @@ from transformers.utils.versions import require_version
 from cao_align.cao_data import MAX_SENTENCE_LENGTH
 from cao_align.utils import (
     DataCollatorForCaoAlignment,
-    MultiDataset,
+    SizedMultiDataset,
     DataCollatorForCaoMLMAlignment,
     tokenize_function_for_parallel,
 )
@@ -212,6 +212,25 @@ class MyTrainingArguments(TrainingArguments):
         },
     )
     do_test: bool = field(default=False, metadata={"help": "Whether to run eval on the test set."})
+    mining_batch_size: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Batch size for mining. None to use per_device_train_batch_size"
+        },
+    )
+    mining_threshold: float = field(
+        default=0.5,
+        metadata={"help": "What word pairs to use with mining training"}
+    )
+    mining_k: int = field(
+        default=1,
+        metadata={"help": "Number of words (above threshold) to mine for each source word"}
+    )
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.mining_batch_size is None:
+            self.mining_batch_size = self.per_device_train_batch_size
 
 
 def get_datasets(data_args, model_args, training_args, tokenizer, model):
@@ -279,9 +298,9 @@ def get_datasets(data_args, model_args, training_args, tokenizer, model):
             for k, v in raw_datasets.items()
     }
 
-    train_dataset = MultiDataset({v: k["train"] for v, k in tokenized_datasets.items()})
-    eval_dataset = MultiDataset({v: k["validation"] for v, k in tokenized_datasets.items()})
-    test_dataset = MultiDataset({v: k["test"] for v, k in tokenized_datasets.items()})
+    train_dataset = SizedMultiDataset({v: k["train"] for v, k in tokenized_datasets.items()})
+    eval_dataset = SizedMultiDataset({v: k["validation"] for v, k in tokenized_datasets.items()})
+    test_dataset = SizedMultiDataset({v: k["test"] for v, k in tokenized_datasets.items()})
 
     # Data collator
     # This one will take care converting lists to tensors

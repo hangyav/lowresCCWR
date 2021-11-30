@@ -333,7 +333,7 @@ def test_trainer(train, eval,
         load_from_cache_file=False,
         desc="Running tokenizer on every text in dataset",
     )
-    train_dataset = cu.MultiDataset({'test': train_dataset})
+    train_dataset = cu.SizedMultiDataset({'test': train_dataset})
     eval_dataset = Dataset.from_dict(eval)
     eval_dataset = eval_dataset.map(
         partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased),
@@ -343,7 +343,7 @@ def test_trainer(train, eval,
         load_from_cache_file=False,
         desc="Running tokenizer on every text in dataset",
     )
-    eval_dataset = cu.MultiDataset({'test': eval_dataset})
+    eval_dataset = cu.SizedMultiDataset({'test': eval_dataset})
     trainer = cm.CaoTrainer(
         model=align_bert,
         args=rc.MyTrainingArguments(
@@ -417,7 +417,7 @@ def test_trainer_mlm(train, eval,
         load_from_cache_file=False,
         desc="Running tokenizer on every text in dataset",
     )
-    train_dataset = cu.MultiDataset({'test': train_dataset})
+    train_dataset = cu.SizedMultiDataset({'test': train_dataset})
     eval_dataset = Dataset.from_dict(eval)
     eval_dataset = eval_dataset.map(
         partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased),
@@ -427,7 +427,7 @@ def test_trainer_mlm(train, eval,
         load_from_cache_file=False,
         desc="Running tokenizer on every text in dataset",
     )
-    eval_dataset = cu.MultiDataset({'test': eval_dataset})
+    eval_dataset = cu.SizedMultiDataset({'test': eval_dataset})
     trainer = cm.CaoTrainer(
         model=align_mlm_bert,
         args=rc.MyTrainingArguments(
@@ -813,3 +813,85 @@ def test_mining_data_loader(src, trg, threshold, k,
 
     for item in data_loader:
         pass
+
+
+@pytest.mark.parametrize('src_train,trg_train,eval', [
+    (
+        {
+            'text': [
+                'I like beer .',
+                'I like beer .',
+            ],
+        },
+        {
+            'text': [
+                'I like beer .',
+                'Ich mag Bier .'
+            ],
+        },
+        {
+            'source': [
+                # needs to have at least k=10 tokens
+                'I like water . 5 6 7 8 9 10',
+            ],
+            'target': [
+                'I like water . 5 6 7 8 9 10',
+            ],
+            'alignment': [
+                [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4),
+                 (5, 5), (6, 6), (7, 7), (8, 8), (9, 9)],
+            ],
+        },
+    ),
+])
+def test_unsupervised_trainer(src_train, trg_train, eval,
+                              bert_base, align_bert,
+                              tokenizer_bert_multilingual_cased):
+    collator = cu.DataCollatorForCaoAlignment(
+        tokenizer=tokenizer_bert_multilingual_cased,
+        max_length=align_bert.bert.embeddings.position_embeddings.num_embeddings,
+        include_clssep=True,
+    )
+    src_train_dataset = Dataset.from_dict(src_train)
+    trg_train_dataset = Dataset.from_dict(trg_train)
+    train_dataset = cu.MultiDataset({
+        'src': src_train_dataset,
+        'trg': trg_train_dataset,
+    })
+    lang_pairs = [('src', 'trg'), ('trg', 'src')]
+    eval_dataset = Dataset.from_dict(eval)
+    eval_dataset = eval_dataset.map(
+        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased),
+        batched=True,
+        num_proc=1,
+        remove_columns=eval_dataset.column_names,
+        load_from_cache_file=False,
+        desc="Running tokenizer on every text in dataset",
+    )
+    eval_dataset = cu.SizedMultiDataset({'test': eval_dataset})
+    trainer = cm.UnsupervisedTrainer(
+        model=align_bert,
+        args=rc.MyTrainingArguments(
+            detailed_logging=True,
+            output_dir='/tmp',
+            logging_steps=1,
+            save_steps=1000,
+            num_train_epochs=1,
+            per_device_train_batch_size=1,
+            evaluation_strategy='steps',
+            eval_steps=2,
+            mining_threshold=0.5,
+            mining_k=1,
+            mining_batch_size=1,
+            max_steps=10,
+        ),
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        tokenizer=tokenizer_bert_multilingual_cased,
+        data_collator=collator,
+        bert_base=bert_base,
+        include_clssep=rc.ModelArguments().include_clssep,
+        language_pairs=lang_pairs,
+    )
+    trainer.train()
+    trainer.evaluate()

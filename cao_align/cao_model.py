@@ -39,10 +39,13 @@ from transformers.trainer_pt_utils import (
 
 from cao_align.multilingual_alignment import hubness_CSLS, bestk_idx_CSLS
 from cao_align.utils import (
+    SizedMultiDataLoader,
     MultiDataLoader,
     cat_tensors_with_padding,
     detokenize,
     sentence_batch_cosine_similarity,
+    MiningDataLoader,
+    DataCollatorForCaoAlignment,
 )
 
 logger = logging.getLogger(__name__)
@@ -608,7 +611,7 @@ class CaoTrainer(Trainer):
         if len(data_loaders) == 1:
             return data_loaders[0]
 
-        return MultiDataLoader(
+        return SizedMultiDataLoader(
                 datasets,
                 data_loaders,
                 batch_size,
@@ -634,7 +637,6 @@ class CaoTrainer(Trainer):
             return DataLoader(
                 dataset,
                 batch_size=batch_size,
-                #  collate_fn=self.data_collator,
                 collate_fn=self.data_collator.get_eval() if eval else self.data_collator,
                 num_workers=self.args.dataloader_num_workers,
                 pin_memory=self.args.dataloader_pin_memory,
@@ -658,7 +660,6 @@ class CaoTrainer(Trainer):
         return DataLoader(
             dataset,
             batch_size=batch_size,
-            #  collate_fn=self.data_collator,
             collate_fn=self.data_collator.get_eval() if eval else self.data_collator,
             num_workers=self.args.dataloader_num_workers,
             pin_memory=self.args.dataloader_pin_memory,
@@ -802,7 +803,7 @@ class CaoTrainer(Trainer):
                 eval_dataset = self.eval_dataset
 
             res = dict()
-            if type(eval_dataloader) == MultiDataLoader:
+            if type(eval_dataloader) == SizedMultiDataLoader:
                 for lang, dataset in tqdm(
                     zip(
                         eval_dataset.datasets.keys(),
@@ -1013,4 +1014,70 @@ class CaoTrainer(Trainer):
 
         if self.control.should_save:
             self._save_checkpoint(model, trial, metrics=metrics)
-            self.control = self.callback_handler.on_save(self.args, self.state, self.control)
+            self.control = self.callback_handler.on_save(
+                self.args,
+                self.state,
+                self.control
+            )
+
+
+class UnsupervisedTrainer(CaoTrainer):
+
+    def __init__(
+        self,
+        model: Union[PreTrainedModel, nn.Module] = None,
+        args: TrainingArguments = None,
+        data_collator: DataCollatorForCaoAlignment = None,
+        train_dataset: Optional[Dataset] = None,
+        eval_dataset: Optional[Dataset] = None,
+        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        model_init: Callable[[], PreTrainedModel] = None,
+        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
+        callbacks: Optional[List[TrainerCallback]] = None,
+        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        bert_base: PreTrainedModel = None,
+        include_clssep: Optional[bool] = True,
+        language_pairs: List[Tuple[str, str]] = None,
+    ):
+        super().__init__(
+            model,
+            args,
+            data_collator,
+            train_dataset,
+            eval_dataset,
+            tokenizer,
+            model_init,
+            compute_metrics,
+            callbacks,
+            optimizers,
+            bert_base,
+            include_clssep,
+        )
+        self.language_pairs = language_pairs
+
+    def get_train_dataloader(self):
+        if self.train_dataset is None:
+            raise ValueError("Trainer: training requires a train_dataset.")
+
+        data_loaders = [
+            MiningDataLoader(
+                self.train_dataset.datasets[src],
+                self.train_dataset.datasets[trg],
+                self.args.per_device_train_batch_size,
+                self.model,
+                self.tokenizer,
+                self.args.mining_threshold,
+                self.data_collator,
+                self.args.mining_k,
+                self.args.mining_batch_size,
+            )
+            for src, trg in self.language_pairs
+        ]
+
+        if len(data_loaders) == 1:
+            return data_loaders[0]
+
+        return MultiDataLoader(
+            self.train_dataset,
+            data_loaders,
+        )
