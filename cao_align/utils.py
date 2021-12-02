@@ -2,6 +2,7 @@ import logging
 from collections.abc import Sized
 from functools import partial
 from typing import Dict
+import numpy as np
 
 import torch
 from torch.utils.data.dataloader import DataLoader
@@ -290,9 +291,9 @@ class MiningDataLoader():
 
     def __init__(self, src_dataset, trg_dataset, batch_size, model, tokenizer,
                  threshold, parallel_collator, k=1, mine_batch_size=None,
-                 dataloader_num_workers=0, dataloader_pin_memory=True):
-        self.src_dataset = src_dataset
-        self.trg_dataset = trg_dataset
+                 dataloader_num_workers=0, dataloader_pin_memory=True,
+                 sample_for_mining=None):
+        self.dataset = (src_dataset, trg_dataset)
         self.batch_size = batch_size
         self.model = model
         self.tokenizer = tokenizer
@@ -302,6 +303,7 @@ class MiningDataLoader():
         self.mine_batch_size = mine_batch_size if mine_batch_size else batch_size
         self.dataloader_pin_memory = dataloader_pin_memory
         self.dataloader_num_workers = dataloader_num_workers
+        self.sample_for_mining = sample_for_mining
 
         self._unlabeled_collator = DataCollatorForUnlabeledData(
             tokenizer=tokenizer,
@@ -327,14 +329,44 @@ class MiningDataLoader():
             load_from_cache_file=False,
         )
 
+    @staticmethod
+    def sample_dataset(datasets, num):
+        assert len({len(d) for d in datasets}) == 1
+        if num >= len(datasets[0]):
+            return datasets
+
+        indices = np.random.choice(
+            range(len(datasets[0])),
+            size=num,
+            replace=False,
+        )
+        return [
+            Dataset.from_dict(dataset[indices])
+            for dataset in datasets
+        ]
+
     def _mine(self):
         model_training = self.model.training
         self.model.eval()
 
+        tokenized_src_dataset = self._tokenized_src_dataset
+        tokenized_trg_dataset = self._tokenized_trg_dataset
+        src_dataset = self.dataset[0]
+        trg_dataset = self.dataset[1]
+        if self.sample_for_mining:
+            tokenized_src_dataset, src_dataset = self.sample_dataset(
+                [tokenized_src_dataset, src_dataset],
+                self.sample_for_mining,
+            )
+            tokenized_trg_dataset, trg_dataset = self.sample_dataset(
+                [tokenized_trg_dataset, trg_dataset],
+                self.sample_for_mining,
+            )
+
         with torch.no_grad():
             mining = self.model.mine_intersection_word_pairs(
-                self._tokenized_src_dataset,
-                self._tokenized_trg_dataset,
+                tokenized_src_dataset,
+                tokenized_trg_dataset,
                 self.threshold,
                 self._unlabeled_collator,
                 k=self.k,
@@ -351,13 +383,13 @@ class MiningDataLoader():
             curr_sent_pair = (item[0], item[2])
 
             if last_sent_pair != curr_sent_pair:
-                self._process(tmp_lst, self.src_dataset, self.trg_dataset, res)
+                self._process(tmp_lst, src_dataset, trg_dataset, res)
                 tmp_lst = list()
                 last_sent_pair = curr_sent_pair
 
             tmp_lst.append(item)
 
-        self._process(tmp_lst, self.src_dataset, self.trg_dataset, res)
+        self._process(tmp_lst, src_dataset, trg_dataset, res)
 
         return Dataset.from_dict(res)
 
@@ -466,13 +498,12 @@ def tokenize_function_per_input(tokenizer, examples):
         special_word_masks.append(1)
 
         for word in example.split():
-            ids = tokenizer.convert_tokens_to_ids(
-                tokenizer.tokenize(word)
-            )
-            #  assert len(ids) > 0, f'{word}'
-            if len(ids) == 0:
-                logger.warning(f'Zero tokens for word: {word}')
-                continue
+            tokens = tokenizer.tokenize(word)
+            if len(tokens) == 0:
+                # XXX why doesn't this happen automatically?
+                tokens = [tokenizer.unk_token]
+            ids = tokenizer.convert_tokens_to_ids(tokens)
+
             cur_len = len(input_ids)
             ids_len = len(ids)
             input_ids.extend(ids)

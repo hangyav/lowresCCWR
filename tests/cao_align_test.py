@@ -41,20 +41,24 @@ def align_mlm_bert():
         [
             'I like beer .',
             'Ich mag Weißbier und Kartoffel .',
+            'I like beer  .',
         ],
         {
             'tokens': [
                 ['[CLS]', 'I', 'like', 'beer', '.', '[SEP]'],
                 ['[CLS]', 'Ich', 'mag', 'Weiß', '##bier', 'und', 'Kar',
                  '##tof', '##fel', '.', '[SEP]'],
+                ['[CLS]', 'I', 'like', 'beer', '[UNK]', '.', '[SEP]'],
             ],
             'word_ids_lst': [
                 [[0], [1], [2], [3], [4], [5]],
                 [[0], [1], [2], [3, 4], [5], [6, 7, 8], [9], [10]],
+                [[0], [1], [2], [3], [4], [5], [6]],
             ],
             'special_word_masks': [
                 [1, 0, 0, 0, 0, 1],
                 [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+                [1, 0, 0, 0, 0, 0, 1],
             ],
         }
     ),
@@ -73,45 +77,49 @@ def test_tokenize_function_per_input(examples, expected,
 
 @pytest.mark.parametrize('features,word_ids_lsts,special_word_masks,'
                          'include_clssep,expected', [
-    (
-        torch.tensor([
-            [[0.0]*5, [1.0]*5, [2.0]*5, [-1.0]*5, [-1.0]*5, [-1.0]*5],
-            [[0.0]*5, [1.0]*5, [1.5]*5, [2.0]*5, [2.5]*5, [3.0]*5],
-        ]),
-        [
-            [[0], [1], [2]],
-            [[0], [1, 2], [3, 4], [5]],
-        ],
-        torch.tensor([
-            [1, 0, 1, 2, 2, 2],
-            [1, 0, 0, 0, 0, 1],
-        ]),
-        True,
-        torch.tensor([
-            [[0.0]*5, [1.0]*5, [2.0]*5, [0.0]*5],
-            [[0.0]*5, [1.5]*5, [2.5]*5, [3.0]*5],
-        ]),
-    ),
-    (
-        torch.tensor([
-            [[0.0]*5, [1.0]*5, [2.0]*5, [-1.0]*5, [-1.0]*5, [-1.0]*5],
-            [[0.0]*5, [1.0]*5, [1.5]*5, [2.0]*5, [2.5]*5, [3.0]*5],
-        ]),
-        [
-            [[0], [1], [2]],
-            [[0], [1, 2], [3, 4], [5]],
-        ],
-        torch.tensor([
-            [1, 0, 1, 2, 2, 2],
-            [1, 0, 0, 0, 0, 1],
-        ]),
-        False,
-        torch.tensor([
-            [[1.0]*5, [0.0]*5],
-            [[1.5]*5, [2.5]*5],
-        ]),
-    ),
-])
+                             (
+                                 torch.tensor([
+                                     [[0.0]*5, [1.0]*5, [2.0]*5, [-1.0]
+                                         * 5, [-1.0]*5, [-1.0]*5],
+                                     [[0.0]*5, [1.0]*5, [1.5]*5,
+                                         [2.0]*5, [2.5]*5, [3.0]*5],
+                                 ]),
+                                 [
+                                     [[0], [1], [2]],
+                                     [[0], [1, 2], [3, 4], [5]],
+                                 ],
+                                 torch.tensor([
+                                     [1, 0, 1, 2, 2, 2],
+                                     [1, 0, 0, 0, 0, 1],
+                                 ]),
+                                 True,
+                                 torch.tensor([
+                                     [[0.0]*5, [1.0]*5, [2.0]*5, [0.0]*5],
+                                     [[0.0]*5, [1.5]*5, [2.5]*5, [3.0]*5],
+                                 ]),
+                             ),
+                             (
+                                 torch.tensor([
+                                     [[0.0]*5, [1.0]*5, [2.0]*5, [-1.0]
+                                         * 5, [-1.0]*5, [-1.0]*5],
+                                     [[0.0]*5, [1.0]*5, [1.5]*5,
+                                         [2.0]*5, [2.5]*5, [3.0]*5],
+                                 ]),
+                                 [
+                                     [[0], [1], [2]],
+                                     [[0], [1, 2], [3, 4], [5]],
+                                 ],
+                                 torch.tensor([
+                                     [1, 0, 1, 2, 2, 2],
+                                     [1, 0, 0, 0, 0, 1],
+                                 ]),
+                                 False,
+                                 torch.tensor([
+                                     [[1.0]*5, [0.0]*5],
+                                     [[1.5]*5, [2.5]*5],
+                                 ]),
+                             ),
+                         ])
 def test_SubwordToTokenStrategyLast(features, word_ids_lsts,
                                     special_word_masks, include_clssep,
                                     expected):
@@ -895,3 +903,50 @@ def test_unsupervised_trainer(src_train, trg_train, eval,
     )
     trainer.train()
     trainer.evaluate()
+
+
+@pytest.mark.parametrize('data,num', [
+    (
+        {
+            'text': [
+                'I like beer . 1',
+                'I like beer . 2',
+                'I like beer . 3',
+                'I like beer . 4',
+                'I like beer . 5',
+                'I like beer . 6',
+                'I like beer . 7',
+            ],
+        },
+        3,
+    ),
+    (
+        {
+            'text': [
+                'I like beer . 1',
+                'I like beer . 2',
+                'I like beer . 3',
+                'I like beer . 4',
+                'I like beer . 5',
+                'I like beer . 6',
+                'I like beer . 7',
+            ],
+        },
+        7,
+    ),
+])
+def test_data_sampler(data, num):
+    dataset = Dataset.from_dict(data)
+    sampled_dataset, sampled_dataset2 = cu.MiningDataLoader.sample_dataset(
+        [dataset, dataset],
+        num,
+    )
+
+    data_len = len(dataset)
+    if num >= data_len:
+        assert sampled_dataset == dataset
+        assert sampled_dataset2 == dataset
+    else:
+        assert len(sampled_dataset) == num
+        assert len(sampled_dataset2) == num
+        assert [t for t in sampled_dataset['text']] == [t for t in sampled_dataset2['text']]

@@ -22,7 +22,6 @@ https://huggingface.co/models?filter=masked-lm
 # You can also adapt this script on your own masked language modeling task. Pointers for this are left as comments.
 
 import logging
-import math
 import os
 import sys
 from functools import partial
@@ -53,11 +52,13 @@ from cao_align.cao_data import MAX_SENTENCE_LENGTH
 from cao_align.utils import (
     DataCollatorForCaoAlignment,
     SizedMultiDataset,
+    MultiDataset,
     DataCollatorForCaoMLMAlignment,
     tokenize_function_for_parallel,
+    tokenize_function_for_unlabeled,
 )
 from cao_align.cao_model import BertForCaoAlign, BertForCaoAlignMLM
-from cao_align.cao_model import CaoTrainer
+from cao_align.cao_model import CaoTrainer, UnsupervisedTrainer
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.9.0")
@@ -136,11 +137,27 @@ class DataTrainingArguments:
     Arguments pertaining to what data we are going to input our model for training and eval.
     """
 
+    data_mode: Optional[str] = field(
+        default='supervised',
+        metadata={"help": "Options: supervised, mining"}
+    )
     dataset_name: Optional[str] = field(
-        default='./cao_align/cao_data.py', metadata={"help": "The name of the dataset to use (via the datasets library)."}
+        default='./cao_align/cao_data.py',
+        metadata={"help": "The name of the dataset to use (via the datasets library)."}
     )
     dataset_config_name: Optional[str] = field(
-        default="es-en,bg-en,fr-en,de-en,el-en,ne-en", metadata={"help": "The configuration name of the dataset to use (via the datasets library)."}
+        default="es-en,bg-en,fr-en,de-en,el-en,ne-en",
+        metadata={"help": "The configuration name of the dataset to use (via the datasets library)."}
+    )
+    mining_dataset_name: Optional[str] = field(
+        default='./cao_align/text_data.py',
+        metadata={"help": "The name of the dataset to use (via the datasets library)."}
+    )
+    mining_language_pairs: Optional[str] = field(
+        default="ne-en,en-ne",
+        metadata={"help": "The configuration name of the unsupervised dataset"
+                  "to use (via the datasets library). These sets are used as"
+                  "the source languages for mining."}
     )
     #  train_file: Optional[str] = field(default=None, metadata={"help": "The input training data file (a text file)."})
     #  validation_file: Optional[str] = field(
@@ -188,6 +205,12 @@ class DataTrainingArguments:
             "value if set."
         },
     )
+    max_mining_samples: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Unsupervised data can be large. Only read n from the head."
+        },
+    )
     do_mlm: bool = field(default=False, metadata={"help": "Whether to Align+MLM or just Align"})
     mlm_probability: float = field(
         default=0.15, metadata={"help": "Ratio of tokens to mask for masked language modeling loss"}
@@ -202,6 +225,19 @@ class DataTrainingArguments:
     def __post_init__(self):
         assert not self.do_mlm or self.src_mlm_weight != 0.0 or self.trg_mlm_weight != 0.0, \
             'Either source or target MLM weight should be none-zero!'
+
+        self.mining_language_pairs = [
+            item.split('-')
+            for item in self.mining_language_pairs.split(',')
+        ]
+
+        if self.max_train_samples == -1:
+            self.max_train_samples = None
+        if self.max_eval_samples == -1:
+            self.max_eval_samples = None
+        if self.max_mining_samples == -1:
+            self.max_mining_samples = None
+
 
 @dataclass
 class MyTrainingArguments(TrainingArguments):
@@ -226,14 +262,24 @@ class MyTrainingArguments(TrainingArguments):
         default=1,
         metadata={"help": "Number of words (above threshold) to mine for each source word"}
     )
+    mining_sample_per_step: Optional[int] = field(
+        default=1000,
+        metadata={
+            "help": "Mining can take long on large corpora. Sample data for"
+            "each mining step."
+        },
+    )
 
     def __post_init__(self):
         super().__post_init__()
         if self.mining_batch_size is None:
             self.mining_batch_size = self.per_device_train_batch_size
 
+        if self.mining_sample_per_step == -1:
+            self.mining_sample_per_step = None
 
-def get_datasets(data_args, model_args, training_args, tokenizer, model):
+
+def get_parallel_datasets(data_args, model_args, training_args, tokenizer, model):
     # Downloading and loading a dataset
     #  raw_datasets = load_dataset(
     #      data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir
@@ -322,6 +368,27 @@ def get_datasets(data_args, model_args, training_args, tokenizer, model):
     return train_dataset, eval_dataset, test_dataset, data_collator
 
 
+def get_mining_datasets(data_args, model_args, tokenizer, model):
+    config_names = {lang for item in data_args.mining_language_pairs for lang in item}
+    load_train = 'train'
+    if data_args.max_mining_samples is not None:
+        load_train = f'train[:{data_args.max_mining_samples}]'
+
+    raw_datasets = {
+        config_name: load_dataset(
+            data_args.mining_dataset_name,
+            config_name,
+            cache_dir=model_args.cache_dir,
+            split={
+                'train': load_train,
+            },
+        )
+        for config_name in config_names
+    }
+
+    return MultiDataset({v: k["train"] for v, k in raw_datasets.items()})
+
+
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
@@ -334,11 +401,6 @@ def main():
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
-
-    if data_args.max_train_samples == -1:
-        data_args.max_train_samples = None
-    if data_args.max_eval_samples == -1:
-        data_args.max_eval_samples = None
 
     # Setup logging
     logging.basicConfig(
@@ -465,13 +527,18 @@ def main():
     for param in model_base.parameters():
         param.requires_grad = False
 
-    train_dataset, eval_dataset, test_dataset, data_collator = get_datasets(
+    train_dataset, eval_dataset, test_dataset, data_collator = get_parallel_datasets(
         data_args,
         model_args,
         training_args,
         tokenizer,
         model,
     )
+
+    mining_dataset = None
+    if data_args.data_mode == 'mining':
+        mining_dataset = get_mining_datasets(data_args, model_args,
+                                               tokenizer, model)
 
     # Initialize our Trainer
     #  optimizer = Adam([param for param in model.parameters() if
@@ -488,17 +555,31 @@ def main():
     #      lr_lambda,
     #  )
     #  trainer = Trainer(
-    trainer = CaoTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset if training_args.do_train else None,
-        eval_dataset=eval_dataset if training_args.do_eval else None,
-        tokenizer=tokenizer,
-        data_collator=data_collator,
-        bert_base=model_base,
-        include_clssep=model_args.include_clssep,
-        #  optimizers=(optimizer, scheduler),
-    )
+    if data_args.data_mode == 'supervised':
+        trainer = CaoTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset if training_args.do_train else None,
+            eval_dataset=eval_dataset if training_args.do_eval else None,
+            tokenizer=tokenizer,
+            data_collator=data_collator,
+            bert_base=model_base,
+            include_clssep=model_args.include_clssep,
+            #  optimizers=(optimizer, scheduler),
+        )
+    elif data_args.data_mode == 'mining':
+        trainer = UnsupervisedTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=mining_dataset if training_args.do_train else None,
+            eval_dataset=eval_dataset if training_args.do_eval else None,
+            tokenizer=tokenizer,
+            data_collator=data_collator,
+            bert_base=model_base,
+            include_clssep=model_args.include_clssep,
+            language_pairs=data_args.mining_language_pairs,
+            #  optimizers=(optimizer, scheduler),
+        )
 
     # Training
     if training_args.do_train:

@@ -154,7 +154,7 @@ class BertForCaoAlign(BertPreTrainedModel):
         return features
 
     def mine_word_pairs(self, src_data, trg_data, threshold, data_collator,
-                        k=1, batch_size=16):
+                        k=1, batch_size=16, progress_bar=True):
         """
         output: [(src_sentence_idx, src_word_idx, trg_sentence_idx, trg_word_idx)]
         """
@@ -165,7 +165,8 @@ class BertForCaoAlign(BertPreTrainedModel):
             batch_size=batch_size,
             collate_fn=data_collator,
         )
-        for src_batch in tqdm(src_data_loader, desc='Mining'):
+        bar = tqdm if progress_bar else lambda x, desc: x
+        for src_batch in bar(src_data_loader, desc='Mining'):
             src_batch_features = self._process_sentences(
                     src_batch['input_ids'].to(self.bert.device),
                     src_batch['attention_masks'].to(self.bert.device),
@@ -255,7 +256,7 @@ class BertForCaoAlign(BertPreTrainedModel):
                 )[(item[1], item[3])] = item[4]
             pbar.update(1)
 
-            for src_idx, trg in tqdm(forward_dict.items()):
+            for src_idx, trg in tqdm(forward_dict.items(), desc='Reverse'):
                 trg_idxs = list(sorted(trg.keys()))
                 src_sent = HugDataset.from_dict(src_data[[src_idx]])
                 trg_sents = HugDataset.from_dict(trg_data[trg_idxs])
@@ -265,7 +266,8 @@ class BertForCaoAlign(BertPreTrainedModel):
                     threshold,
                     data_collator,
                     k,
-                    batch_size
+                    batch_size,
+                    progress_bar=False,
                 )
 
                 for item in backward:
@@ -1070,6 +1072,7 @@ class UnsupervisedTrainer(CaoTrainer):
                 self.data_collator,
                 self.args.mining_k,
                 self.args.mining_batch_size,
+                sample_for_mining=self.args.mining_sample_per_step,
             )
             for src, trg in self.language_pairs
         ]
