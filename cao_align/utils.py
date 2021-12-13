@@ -1,3 +1,4 @@
+import os
 import logging
 from collections.abc import Sized
 from functools import partial
@@ -13,6 +14,8 @@ from transformers import PreTrainedTokenizerBase
 from transformers.data.data_collator import DataCollatorForLanguageModeling
 
 from datasets import Dataset
+
+from mining_extractor import get_color, reset_color
 
 logger = logging.getLogger(__name__)
 
@@ -292,7 +295,7 @@ class MiningDataLoader():
     def __init__(self, src_dataset, trg_dataset, batch_size, model, tokenizer,
                  threshold, parallel_collator, k=1, mine_batch_size=None,
                  dataloader_num_workers=0, dataloader_pin_memory=True,
-                 sample_for_mining=None):
+                 sample_for_mining=None, threshold_max=100, log_dir=None):
         self.dataset = (src_dataset, trg_dataset)
         self.batch_size = batch_size
         self.model = model
@@ -304,6 +307,9 @@ class MiningDataLoader():
         self.dataloader_pin_memory = dataloader_pin_memory
         self.dataloader_num_workers = dataloader_num_workers
         self.sample_for_mining = sample_for_mining
+        self.threshold_max = threshold_max
+        self.log_dir = log_dir
+        self._num_minings = 0
 
         self._unlabeled_collator = DataCollatorForUnlabeledData(
             tokenizer=tokenizer,
@@ -371,6 +377,7 @@ class MiningDataLoader():
                 self._unlabeled_collator,
                 k=self.k,
                 batch_size=self.mine_batch_size,
+                threshold_max=self.threshold_max,
             )
 
         if model_training:
@@ -390,6 +397,8 @@ class MiningDataLoader():
             tmp_lst.append(item)
 
         self._process(tmp_lst, src_dataset, trg_dataset, res)
+        self._log_if_needed(res)
+        res.pop('score')
 
         return Dataset.from_dict(res)
 
@@ -402,10 +411,34 @@ class MiningDataLoader():
         src_sent = src_dataset['text'][src_sent_id]
         trg_sent = trg_dataset['text'][trg_sent_id]
         alignments = [[align[1], align[3]] for align in align_lst]
+        scores = [align[4] for align in align_lst]
 
         out_dict.setdefault('source', list()).append(src_sent)
         out_dict.setdefault('target', list()).append(trg_sent)
         out_dict.setdefault('alignment', list()).append(alignments)
+        out_dict.setdefault('score', list()).append(scores)
+
+    def _log_if_needed(self, dataset):
+        if self.log_dir is not None:
+            with open(os.path.join(self.log_dir, f'minings.{self._num_minings}.log'), 'w') as fout:
+                for i in range(len(dataset['source'])):
+                    s1 = dataset['source'][i].split()
+                    s2 = dataset['target'][i].split()
+
+                    for idx, (align, score) in enumerate(zip(
+                        dataset['alignment'][i],
+                        dataset['score'][i],
+                    )):
+                        print(f'{get_color(idx)}{align[0]}:{s1[align[0]]}'
+                              + f' - {align[1]}:{s2[align[1]]}'
+                              + f' - {score}{reset_color}', file=fout)
+                        s1[align[0]] = f'{get_color(idx)}{s1[align[0]]}{reset_color}'
+                        s2[align[1]] = f'{get_color(idx)}{s2[align[1]]}{reset_color}'
+
+                    print(' '.join(s1), file=fout)
+                    print(' '.join(s2), file=fout)
+                    print('', file=fout)
+            self._num_minings += 1
 
     def _get_data_loader(self):
         dataset = self._mine()

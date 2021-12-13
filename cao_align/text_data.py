@@ -20,6 +20,7 @@ _DATA_URL = "https://www.cis.uni-muenchen.de/~hangyav/data/ccwe_text_data.zip"
 
 LANGUAGE_PATHS = {
     'en': 'enwiki.tok.sample',
+    'de': 'dewiki.tok.sample',
     'ne': 'wiki-ne.tok.sample',
 }
 
@@ -34,7 +35,7 @@ class TextConfig(datasets.BuilderConfig):
         super(TextConfig, self).__init__(
             name=language,
             description=description,
-            version=datasets.Version("1.0.0", ""),
+            version=datasets.Version("1.0.1", ""),
             **kwargs,
         )
 
@@ -46,6 +47,7 @@ class TextConfig(datasets.BuilderConfig):
 class Text(datasets.GeneratorBasedBuilder):
     BUILDER_CONFIGS = [
         TextConfig(language="en"),
+        TextConfig(language="de"),
         TextConfig(language="ne"),
     ]
 

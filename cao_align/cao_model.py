@@ -154,7 +154,8 @@ class BertForCaoAlign(BertPreTrainedModel):
         return features
 
     def mine_word_pairs(self, src_data, trg_data, threshold, data_collator,
-                        k=1, batch_size=16, progress_bar=True):
+                        k=1, batch_size=16, threshold_max=100,
+                        progress_bar=True):
         """
         output: [(src_sentence_idx, src_word_idx, trg_sentence_idx, trg_word_idx)]
         """
@@ -201,6 +202,7 @@ class BertForCaoAlign(BertPreTrainedModel):
                         trg_batch_features,
                     )
                     similarities[similarities < threshold] = 0.0
+                    similarities[similarities > threshold_max] = 0.0
 
                     #  zero out elements which belong to a src or trg token
                     #  which is a PAD
@@ -238,11 +240,13 @@ class BertForCaoAlign(BertPreTrainedModel):
         return list(sorted(res, key=lambda x: (x[0], x[2], x[1], x[3])))
 
     def mine_intersection_word_pairs(self, src_data, trg_data, threshold,
-                                     data_collator, k=1, batch_size=16):
+                                     data_collator, k=1, batch_size=16,
+                                     threshold_max=100):
         with tqdm(desc='Intersection mining', total=3) as pbar:
             res = list()
             forward = self.mine_word_pairs(src_data, trg_data, threshold,
-                                           data_collator, k, batch_size)
+                                           data_collator, k, batch_size,
+                                           threshold_max=threshold_max)
             pbar.update(1)
 
             forward_dict = dict()
@@ -268,6 +272,7 @@ class BertForCaoAlign(BertPreTrainedModel):
                     k,
                     batch_size,
                     progress_bar=False,
+                    threshold_max=threshold_max,
                 )
 
                 for item in backward:
@@ -1073,6 +1078,8 @@ class UnsupervisedTrainer(CaoTrainer):
                 self.args.mining_k,
                 self.args.mining_batch_size,
                 sample_for_mining=self.args.mining_sample_per_step,
+                threshold_max=self.args.mining_threshold_max,
+                log_dir=self.args.logging_dir if self.args.detailed_logging else None,
             )
             for src, trg in self.language_pairs
         ]

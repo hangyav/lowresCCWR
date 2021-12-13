@@ -65,6 +65,10 @@ class ModelArguments:
     threshold: float = field(
         metadata={"help": "Minimum word pair similarity."},
     )
+    threshold_max: float = field(
+        default=100,
+        metadata={"help": "Maximum word pair similarity."},
+    )
     mine_method: str = field(
         default='intersection',
         metadata={"help": "{forward, intersection}"},
@@ -218,6 +222,7 @@ def main():
         data_collator,
         k=model_args.k,
         batch_size=model_args.batch_size,
+        threshold_max=model_args.threshold_max,
     )
 
     def _process(align_lst, src_dataset, trg_dataset, output):

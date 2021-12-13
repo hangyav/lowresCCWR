@@ -258,6 +258,12 @@ class MyTrainingArguments(TrainingArguments):
         default=0.5,
         metadata={"help": "What word pairs to use with mining training"}
     )
+    mining_threshold_max: float = field(
+        default=100.0,
+        metadata={"help": "What word pairs to use with mining training. Filter"
+                  "too similar words which are often punctuations, numbers"
+                  "or words from the same language due to code switch."}
+    )
     mining_k: int = field(
         default=1,
         metadata={"help": "Number of words (above threshold) to mine for each source word"}
@@ -538,7 +544,7 @@ def main():
     mining_dataset = None
     if data_args.data_mode == 'mining':
         mining_dataset = get_mining_datasets(data_args, model_args,
-                                               tokenizer, model)
+                                             tokenizer, model)
 
     # Initialize our Trainer
     #  optimizer = Adam([param for param in model.parameters() if
