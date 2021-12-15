@@ -291,6 +291,151 @@ class MyTrainingArguments(TrainingArguments):
             self.mining_sample_per_step = None
 
 
+def setup():
+    # See all possible arguments in src/transformers/training_args.py
+    # or by passing the --help flag to this script.
+    # We now keep distinct sets of args, for a cleaner separation of concerns.
+
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, MyTrainingArguments))
+    if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
+        # If we pass only one argument to the script and it's the path to a json file,
+        # let's parse it to get our arguments.
+        model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
+    else:
+        model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+
+    # Setup logging
+    logging.basicConfig(
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+        datefmt="%m/%d/%Y %H:%M:%S",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
+
+    log_level = training_args.get_process_log_level()
+    logger.setLevel(log_level)
+    datasets.utils.logging.set_verbosity(log_level)
+    transformers.utils.logging.set_verbosity(log_level)
+    transformers.utils.logging.enable_default_handler()
+    transformers.utils.logging.enable_explicit_format()
+
+    # Log on each process the small summary:
+    logger.warning(
+        f"Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}"
+        + f"distributed training: {bool(training_args.local_rank != -1)}, 16-bits training: {training_args.fp16}"
+    )
+    # Set the verbosity to info of the Transformers logger (on main process only):
+    logger.info(f"Training/evaluation parameters {training_args}")
+
+    # Set seed before initializing model.
+    set_seed(training_args.seed)
+
+    return model_args, data_args, training_args
+
+
+def get_model_components(model_args, data_args, training_args):
+    # Detecting last checkpoint.
+    last_checkpoint = None
+    if os.path.isdir(training_args.output_dir) and training_args.do_train and not training_args.overwrite_output_dir:
+        last_checkpoint = get_last_checkpoint(training_args.output_dir)
+        if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
+            raise ValueError(
+                f"Output directory ({training_args.output_dir}) already exists and is not empty. "
+                "Use --overwrite_output_dir to overcome."
+            )
+        elif last_checkpoint is not None and training_args.resume_from_checkpoint is None:
+            logger.info(
+                f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
+                "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
+            )
+
+    # Load pretrained model and tokenizer
+    #
+    # Distributed training:
+    # The .from_pretrained methods guarantee that only one local process can concurrently
+    # download model & vocab.
+    config_kwargs = {
+        "cache_dir": model_args.cache_dir,
+        "revision": model_args.model_revision,
+        "use_auth_token": True if model_args.use_auth_token else None,
+    }
+    if model_args.config_name:
+        config = AutoConfig.from_pretrained(model_args.config_name, **config_kwargs)
+    elif model_args.model_name_or_path:
+        config = AutoConfig.from_pretrained(model_args.model_name_or_path, **config_kwargs)
+    else:
+        config = CONFIG_MAPPING[model_args.model_type]()
+        logger.warning("You are instantiating a new config instance from scratch.")
+        if model_args.config_overrides is not None:
+            logger.info(f"Overriding config: {model_args.config_overrides}")
+            config.update_from_string(model_args.config_overrides)
+
+    tokenizer_kwargs = {
+        "cache_dir": model_args.cache_dir,
+        "use_fast": model_args.use_fast_tokenizer,
+        "revision": model_args.model_revision,
+        "use_auth_token": True if model_args.use_auth_token else None,
+    }
+    if model_args.tokenizer_name:
+        tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, **tokenizer_kwargs)
+    elif model_args.model_name_or_path:
+        tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, **tokenizer_kwargs)
+    else:
+        raise ValueError(
+            "You are instantiating a new tokenizer from scratch. This is not supported by this script."
+            "You can do it from another script, save it, and load it from here, using --tokenizer_name."
+        )
+
+    if model_args.model_name_or_path:
+        if not data_args.do_mlm:
+            model = BertForCaoAlign.from_pretrained(
+                model_args.model_name_or_path,
+                from_tf=bool(".ckpt" in model_args.model_name_or_path),
+                config=config,
+                cache_dir=model_args.cache_dir,
+                revision=model_args.model_revision,
+                use_auth_token=True if model_args.use_auth_token else None,
+            )
+        else:
+            model = BertForCaoAlignMLM.from_pretrained(
+                model_args.model_name_or_path,
+                from_tf=bool(".ckpt" in model_args.model_name_or_path),
+                config=config,
+                cache_dir=model_args.cache_dir,
+                revision=model_args.model_revision,
+                use_auth_token=True if model_args.use_auth_token else None,
+                src_mlm_weight=data_args.src_mlm_weight,
+                trg_mlm_weight=data_args.trg_mlm_weight,
+            )
+
+        model_base = BertModel.from_pretrained(
+            model_args.model_name_or_path,
+            from_tf=bool(".ckpt" in model_args.model_name_or_path),
+            config=config,
+            cache_dir=model_args.cache_dir,
+            revision=model_args.model_revision,
+            use_auth_token=True if model_args.use_auth_token else None,
+        )
+
+    else:
+        logger.info("Training new model from scratch")
+        if not data_args.do_mlm:
+            model = BertForCaoAlign.from_config(config)
+        else:
+            model = BertForCaoAlignMLM.from_config(
+                config,
+                src_mlm_weight=data_args.src_mlm_weight,
+                trg_mlm_weight=data_args.trg_mlm_weight,
+            )
+        model_base = BertModel.from_config(config)
+
+    model.resize_token_embeddings(len(tokenizer))
+    model_base.resize_token_embeddings(len(tokenizer))
+    for param in model_base.parameters():
+        param.requires_grad = False
+
+    return tokenizer, model, model_base, last_checkpoint
+
+
 def get_parallel_datasets(data_args, model_args, training_args, tokenizer, model):
     # Downloading and loading a dataset
     #  raw_datasets = load_dataset(
@@ -401,157 +546,9 @@ def get_mining_datasets(data_args, model_args, tokenizer, model):
     return MultiDataset({v: k["train"] for v, k in raw_datasets.items()})
 
 
-def main():
-    # See all possible arguments in src/transformers/training_args.py
-    # or by passing the --help flag to this script.
-    # We now keep distinct sets of args, for a cleaner separation of concerns.
-
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, MyTrainingArguments))
-    if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
-        # If we pass only one argument to the script and it's the path to a json file,
-        # let's parse it to get our arguments.
-        model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
-    else:
-        model_args, data_args, training_args = parser.parse_args_into_dataclasses()
-
-    # Setup logging
-    logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-        datefmt="%m/%d/%Y %H:%M:%S",
-        handlers=[logging.StreamHandler(sys.stdout)],
-    )
-
-    log_level = training_args.get_process_log_level()
-    logger.setLevel(log_level)
-    datasets.utils.logging.set_verbosity(log_level)
-    transformers.utils.logging.set_verbosity(log_level)
-    transformers.utils.logging.enable_default_handler()
-    transformers.utils.logging.enable_explicit_format()
-
-    # Log on each process the small summary:
-    logger.warning(
-        f"Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}"
-        + f"distributed training: {bool(training_args.local_rank != -1)}, 16-bits training: {training_args.fp16}"
-    )
-    # Set the verbosity to info of the Transformers logger (on main process only):
-    logger.info(f"Training/evaluation parameters {training_args}")
-
-    # Detecting last checkpoint.
-    last_checkpoint = None
-    if os.path.isdir(training_args.output_dir) and training_args.do_train and not training_args.overwrite_output_dir:
-        last_checkpoint = get_last_checkpoint(training_args.output_dir)
-        if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
-            raise ValueError(
-                f"Output directory ({training_args.output_dir}) already exists and is not empty. "
-                "Use --overwrite_output_dir to overcome."
-            )
-        elif last_checkpoint is not None and training_args.resume_from_checkpoint is None:
-            logger.info(
-                f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
-                "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
-            )
-
-    # Set seed before initializing model.
-    set_seed(training_args.seed)
-
-    # Load pretrained model and tokenizer
-    #
-    # Distributed training:
-    # The .from_pretrained methods guarantee that only one local process can concurrently
-    # download model & vocab.
-    config_kwargs = {
-        "cache_dir": model_args.cache_dir,
-        "revision": model_args.model_revision,
-        "use_auth_token": True if model_args.use_auth_token else None,
-    }
-    if model_args.config_name:
-        config = AutoConfig.from_pretrained(model_args.config_name, **config_kwargs)
-    elif model_args.model_name_or_path:
-        config = AutoConfig.from_pretrained(model_args.model_name_or_path, **config_kwargs)
-    else:
-        config = CONFIG_MAPPING[model_args.model_type]()
-        logger.warning("You are instantiating a new config instance from scratch.")
-        if model_args.config_overrides is not None:
-            logger.info(f"Overriding config: {model_args.config_overrides}")
-            config.update_from_string(model_args.config_overrides)
-
-    tokenizer_kwargs = {
-        "cache_dir": model_args.cache_dir,
-        "use_fast": model_args.use_fast_tokenizer,
-        "revision": model_args.model_revision,
-        "use_auth_token": True if model_args.use_auth_token else None,
-    }
-    if model_args.tokenizer_name:
-        tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, **tokenizer_kwargs)
-    elif model_args.model_name_or_path:
-        tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, **tokenizer_kwargs)
-    else:
-        raise ValueError(
-            "You are instantiating a new tokenizer from scratch. This is not supported by this script."
-            "You can do it from another script, save it, and load it from here, using --tokenizer_name."
-        )
-
-    if model_args.model_name_or_path:
-        if not data_args.do_mlm:
-            model = BertForCaoAlign.from_pretrained(
-                model_args.model_name_or_path,
-                from_tf=bool(".ckpt" in model_args.model_name_or_path),
-                config=config,
-                cache_dir=model_args.cache_dir,
-                revision=model_args.model_revision,
-                use_auth_token=True if model_args.use_auth_token else None,
-            )
-        else:
-            model = BertForCaoAlignMLM.from_pretrained(
-                model_args.model_name_or_path,
-                from_tf=bool(".ckpt" in model_args.model_name_or_path),
-                config=config,
-                cache_dir=model_args.cache_dir,
-                revision=model_args.model_revision,
-                use_auth_token=True if model_args.use_auth_token else None,
-                src_mlm_weight=data_args.src_mlm_weight,
-                trg_mlm_weight=data_args.trg_mlm_weight,
-            )
-
-        model_base = BertModel.from_pretrained(
-            model_args.model_name_or_path,
-            from_tf=bool(".ckpt" in model_args.model_name_or_path),
-            config=config,
-            cache_dir=model_args.cache_dir,
-            revision=model_args.model_revision,
-            use_auth_token=True if model_args.use_auth_token else None,
-        )
-
-    else:
-        logger.info("Training new model from scratch")
-        if not data_args.do_mlm:
-            model = BertForCaoAlign.from_config(config)
-        else:
-            model = BertForCaoAlignMLM.from_config(
-                config,
-                src_mlm_weight=data_args.src_mlm_weight,
-                trg_mlm_weight=data_args.trg_mlm_weight,
-            )
-        model_base = BertModel.from_config(config)
-
-    model.resize_token_embeddings(len(tokenizer))
-    model_base.resize_token_embeddings(len(tokenizer))
-    for param in model_base.parameters():
-        param.requires_grad = False
-
-    train_dataset, eval_dataset, test_dataset, data_collator = get_parallel_datasets(
-        data_args,
-        model_args,
-        training_args,
-        tokenizer,
-        model,
-    )
-
-    mining_dataset = None
-    if data_args.data_mode == 'mining':
-        mining_dataset = get_mining_datasets(data_args, model_args,
-                                             tokenizer, model)
-
+def get_trainer(model_args, data_args, training_args, tokenizer, model,
+                model_base, train_dataset, eval_dataset, mining_dataset,
+                data_collator):
     # Initialize our Trainer
     #  optimizer = Adam([param for param in model.parameters() if
     #                    param.requires_grad], lr=training_args.learning_rate,
@@ -593,6 +590,11 @@ def main():
             #  optimizers=(optimizer, scheduler),
         )
 
+    return trainer
+
+
+def run(data_args, training_args, trainer, last_checkpoint, train_dataset,
+        eval_dataset, test_dataset):
     # Training
     if training_args.do_train:
         if training_args.do_eval:
@@ -641,6 +643,35 @@ def main():
 
         trainer.log_metrics("test", metrics)
         trainer.save_metrics("test", metrics)
+
+
+def main():
+    model_args, data_args, training_args = setup()
+    tokenizer, model, model_base, last_checkpoint = get_model_components(
+        model_args,
+        data_args,
+        training_args,
+    )
+
+    train_dataset, eval_dataset, test_dataset, data_collator = get_parallel_datasets(
+        data_args,
+        model_args,
+        training_args,
+        tokenizer,
+        model,
+    )
+
+    mining_dataset = None
+    if data_args.data_mode == 'mining':
+        mining_dataset = get_mining_datasets(data_args, model_args,
+                                             tokenizer, model)
+
+    trainer = get_trainer(model_args, data_args, training_args, tokenizer,
+                          model, model_base, train_dataset, eval_dataset,
+                          mining_dataset, data_collator)
+
+    run(data_args, training_args, trainer, last_checkpoint, train_dataset,
+        eval_dataset, test_dataset)
 
 
 def _mp_fn(index):
