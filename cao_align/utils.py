@@ -292,10 +292,16 @@ class SizedMultiDataLoader(MultiDataLoader, Sized):
 
 class MiningDataLoader():
 
+    mine_fns = {
+        'forward': 'mine_word_pairs',
+        'intersection': 'mine_intersection_word_pairs',
+    }
+
     def __init__(self, src_dataset, trg_dataset, batch_size, model, tokenizer,
                  threshold, parallel_collator, k=1, mine_batch_size=None,
                  dataloader_num_workers=0, dataloader_pin_memory=True,
-                 sample_for_mining=None, threshold_max=100, log_dir=None):
+                 sample_for_mining=None, threshold_max=100, log_dir=None,
+                 mining_method='intersection', num_dataset_iterations=1):
         self.dataset = (src_dataset, trg_dataset)
         self.batch_size = batch_size
         self.model = model
@@ -310,6 +316,9 @@ class MiningDataLoader():
         self.threshold_max = threshold_max
         self.log_dir = log_dir
         self._num_minings = 0
+        self.num_dataset_iterations = num_dataset_iterations
+        assert mining_method in self.mine_fns, f'Method {mining_method} not supported'
+        self.mining_method = mining_method
 
         self._unlabeled_collator = DataCollatorForUnlabeledData(
             tokenizer=tokenizer,
@@ -325,6 +334,7 @@ class MiningDataLoader():
             trg_dataset,
             tokenize_function_for_unlabeled,
         )
+        self._tmp_data_loader = None
 
     def _tokenize_dataset(self, dataset, tok_fv):
         return dataset.map(
@@ -370,7 +380,8 @@ class MiningDataLoader():
             )
 
         with torch.no_grad():
-            mining = self.model.mine_intersection_word_pairs(
+            mine_fn = getattr(self.model, self.mine_fns[self.mining_method])
+            mining = mine_fn(
                 tokenized_src_dataset,
                 tokenized_trg_dataset,
                 self.threshold,
@@ -441,19 +452,31 @@ class MiningDataLoader():
             self._num_minings += 1
 
     def _get_data_loader(self):
-        dataset = self._mine()
-        dataset = self._tokenize_dataset(
-            dataset,
-            tokenize_function_for_parallel
-        )
+        if self._tmp_data_loader is not None and self._tmp_data_loader[1] < 1:
+            self._tmp_data_loader = None
 
-        return DataLoader(
-            dataset,
-            batch_size=self.batch_size,
-            collate_fn=self.parallel_collator,
-            num_workers=self.dataloader_num_workers,
-            pin_memory=self.dataloader_pin_memory,
+        if self._tmp_data_loader is None:
+            dataset = self._mine()
+            dataset = self._tokenize_dataset(
+                dataset,
+                tokenize_function_for_parallel
+            )
+
+            data_loader = DataLoader(
+                dataset,
+                batch_size=self.batch_size,
+                collate_fn=self.parallel_collator,
+                num_workers=self.dataloader_num_workers,
+                pin_memory=self.dataloader_pin_memory,
+            )
+            self._tmp_data_loader = (data_loader, self.num_dataset_iterations)
+
+        self._tmp_data_loader = (
+            self._tmp_data_loader[0],
+            self._tmp_data_loader[1] - 1,
         )
+        return self._tmp_data_loader[0]
+
 
     def __iter__(self):
         return self._get_data_loader().__iter__()

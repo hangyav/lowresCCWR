@@ -275,6 +275,12 @@ class MyTrainingArguments(TrainingArguments):
             "each mining step."
         },
     )
+    mining_method: Optional[str] = field(
+        default='intersection',
+        metadata={
+            "help": "Options: forward, intersection"
+        },
+    )
 
     def __post_init__(self):
         super().__post_init__()

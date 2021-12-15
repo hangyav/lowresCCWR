@@ -165,6 +165,7 @@ class BertForCaoAlign(BertPreTrainedModel):
             src_data,
             batch_size=batch_size,
             collate_fn=data_collator,
+            pin_memory=self.bert.device == 'cuda:0',
         )
         bar = tqdm if progress_bar else lambda x, desc: x
         for src_batch in bar(src_data_loader, desc='Mining'):
@@ -181,6 +182,7 @@ class BertForCaoAlign(BertPreTrainedModel):
                 trg_data,
                 batch_size=batch_size,
                 collate_fn=data_collator,
+                pin_memory=self.bert.device == 'cuda:0',
             )
             trg_batch_offset = 0
             for trg_batch in trg_data_loader:
@@ -1080,6 +1082,7 @@ class UnsupervisedTrainer(CaoTrainer):
                 sample_for_mining=self.args.mining_sample_per_step,
                 threshold_max=self.args.mining_threshold_max,
                 log_dir=self.args.logging_dir if self.args.detailed_logging else None,
+                mining_method=self.args.mining_method,
             )
             for src, trg in self.language_pairs
         ]
