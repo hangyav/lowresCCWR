@@ -105,6 +105,8 @@ class Cao(datasets.GeneratorBasedBuilder):
                     datasets.Sequence(datasets.Value('int32'))
                 ),
                 #  "alignment": datasets.Array2D(shape=(-1, 2), dtype=int),
+                "source_language": datasets.Value("string"),
+                "target_language": datasets.Value("string"),
                 }),
             #  supervised_keys=("source", "target", "alignment"),
             homepage="",
@@ -128,6 +130,7 @@ class Cao(datasets.GeneratorBasedBuilder):
                     "filepaths": paths,
                     "start_idx": LANGUAGE_SENTENCES_NUMBERS[name][0] + LANGUAGE_SENTENCES_NUMBERS[name][1],
                     "num_lines": LANGUAGE_SENTENCES_NUMBERS[name][2],
+                    "language_pair": self.config.language_pair,
                 }
             ),
             datasets.SplitGenerator(
@@ -136,6 +139,7 @@ class Cao(datasets.GeneratorBasedBuilder):
                     "filepaths": paths,
                     "start_idx": LANGUAGE_SENTENCES_NUMBERS[name][0],
                     "num_lines": LANGUAGE_SENTENCES_NUMBERS[name][1],
+                    "language_pair": self.config.language_pair,
                 }
             ),
             datasets.SplitGenerator(
@@ -144,11 +148,12 @@ class Cao(datasets.GeneratorBasedBuilder):
                     "filepaths": paths,
                     "start_idx": 0,
                     "num_lines": LANGUAGE_SENTENCES_NUMBERS[name][0],
+                    "language_pair": self.config.language_pair,
                 }
             ),
         ]
 
-    def _generate_examples(self, filepaths, start_idx, num_lines):
+    def _generate_examples(self, filepaths, start_idx, num_lines, language_pair):
         with open(filepaths[0]) as f_sents, open(filepaths[1]) as f_align:
             idx = 0
             num = 0
@@ -174,5 +179,7 @@ class Cao(datasets.GeneratorBasedBuilder):
                         "source": sent1,
                         "target": sent2,
                         "alignment": align_lst,
+                        "source_language": language_pair[0],
+                        "target_language": language_pair[1],
                     }
                     idx += 1

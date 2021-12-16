@@ -199,6 +199,12 @@ def test_word_alignment(alignment, src_special_word_masks,
             'alignment': [
                 [(0, 0), (1, 1), (2, 2), (3, 3)],
             ],
+            'source_language': [
+                'en',
+            ],
+            'target_language': [
+                'en',
+            ]
         },
         {
             'alignment_loss': 0.0,
@@ -222,6 +228,12 @@ def test_word_alignment(alignment, src_special_word_masks,
             'alignment': [
                 [(0, 0), (1, 2), (2, 1), (3, 3)],
             ],
+            'source_language': [
+                'en',
+            ],
+            'target_language': [
+                'en',
+            ]
         },
         {
             'alignment_loss': 0.0,
@@ -245,6 +257,12 @@ def test_word_alignment(alignment, src_special_word_masks,
             'alignment': [
                 [(0, 0), (1, 1), (2, 2), (3, 3)],
             ],
+            'source_language': [
+                'en',
+            ],
+            'target_language': [
+                'en',
+            ]
         },
         {
             'alignment_loss': 0.0,
@@ -309,6 +327,14 @@ def test_pipeline(examples, expected, equals,
                 [(0, 0), (1, 1), (2, 2), (3, 3)],
                 [(0, 0), (1, 1), (2, 2), (3, 3)],
             ],
+            'source_language': [
+                'en',
+                'en',
+            ],
+            'target_language': [
+                'en',
+                'en',
+            ]
         },
         {
             'source': [
@@ -322,6 +348,12 @@ def test_pipeline(examples, expected, equals,
                 [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4),
                  (5, 5), (6, 6), (7, 7), (8, 8), (9, 9)],
             ],
+            'source_language': [
+                'en',
+            ],
+            'target_language': [
+                'en',
+            ]
         },
     ),
 ])
@@ -390,6 +422,14 @@ def test_trainer(train, eval,
                 [(0, 0), (1, 1), (2, 2), (3, 3)],
                 [(0, 0), (1, 1), (2, 2), (3, 3)],
             ],
+            'source_language': [
+                'en',
+                'en',
+            ],
+            'target_language': [
+                'en',
+                'en',
+            ],
         },
         {
             'source': [
@@ -402,6 +442,12 @@ def test_trainer(train, eval,
             'alignment': [
                 [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4),
                  (5, 5), (6, 6), (7, 7), (8, 8), (9, 9)],
+            ],
+            'source_language': [
+                'en',
+            ],
+            'target_language': [
+                'en',
             ],
         },
     ),
@@ -471,6 +517,12 @@ def test_trainer_mlm(train, eval,
             'alignment': [
                 [(0, 0), (1, 1), (2, 2), (3, 3)],
             ],
+            'source_language': [
+                'en',
+            ],
+            'target_language': [
+                'en',
+            ],
         },
         {
             'alignment_loss': 0.0,
@@ -496,6 +548,12 @@ def test_trainer_mlm(train, eval,
             'alignment': [
                 [(0, 0), (1, 2), (2, 1), (3, 3)],
             ],
+            'source_language': [
+                'en',
+            ],
+            'target_language': [
+                'en',
+            ],
         },
         {
             'alignment_loss': 0.0,
@@ -520,6 +578,12 @@ def test_trainer_mlm(train, eval,
             ],
             'alignment': [
                 [(0, 0), (1, 1), (2, 2), (3, 3)],
+            ],
+            'source_language': [
+                'en',
+            ],
+            'target_language': [
+                'en',
             ],
         },
         {
@@ -617,12 +681,23 @@ def test_detokenize(examples, expected, tokenizer_bert_multilingual_cased):
                 'I like beer .',
                 'ThisTokenIsSplit to BPEs'
             ],
+            'language': [
+                'en',
+                'de',
+                'en',
+                'en',
+            ],
         },
         {
             'text': [
                 'I like beer .',
                 'Du learnst Deutsch .',
                 'ThisTokenIsSplit to BPEs'
+            ],
+            'language': [
+                'en',
+                'en',
+                'en',
             ],
         },
         0.0,
@@ -639,6 +714,9 @@ def test_detokenize(examples, expected, tokenizer_bert_multilingual_cased):
             'text': [
                 'Apfel'
             ],
+            'language': [
+                'en',
+            ],
         },
         {
             'text': [
@@ -649,6 +727,15 @@ def test_detokenize(examples, expected, tokenizer_bert_multilingual_cased):
                 'Der ist ein Apfel',
                 'This is a dummy sentence',
                 'Apfel ist der beste',
+            ],
+            'language': [
+                'en',
+                'en',
+                'en',
+                'en',
+                'en',
+                'en',
+                'en',
             ],
         },
         0.6,
@@ -701,12 +788,23 @@ def test_mining(src, trg, threshold, k, expected,
                 'I like beer .',
                 'ThisTokenIsSplit to BPEs'
             ],
+            'language': [
+                'en',
+                'de',
+                'en',
+                'en',
+            ],
         },
         {
             'text': [
                 'I like beer .',
                 'Du learnst Deutsch .',
                 'ThisTokenIsSplit to BPEs'
+            ],
+            'language': [
+                'en',
+                'en',
+                'en',
             ],
         },
         0.0,
@@ -723,6 +821,9 @@ def test_mining(src, trg, threshold, k, expected,
             'text': [
                 'Apfel'
             ],
+            'language': [
+                'de',
+            ],
         },
         {
             'text': [
@@ -733,6 +834,15 @@ def test_mining(src, trg, threshold, k, expected,
                 'Der ist ein Apfel',
                 'This is a dummy sentence',
                 'Apfel ist der beste',
+            ],
+            'language': [
+                'en',
+                'en',
+                'en',
+                'en',
+                'en',
+                'en',
+                'en',
             ],
         },
         0.6,
@@ -785,12 +895,23 @@ def test_intersection_mining(src, trg, threshold, k, expected,
                 'I like beer .',
                 'ThisTokenIsSplit to BPEs'
             ],
+            'language': [
+                'en',
+                'de',
+                'en',
+                'en',
+            ],
         },
         {
             'text': [
                 'I like beer .',
                 'Du learnst Deutsch .',
                 'ThisTokenIsSplit to BPEs'
+            ],
+            'language': [
+                'en',
+                'en',
+                'en',
             ],
         },
         0.0,
@@ -830,11 +951,19 @@ def test_mining_data_loader(src, trg, threshold, k,
                 'I like beer .',
                 'I like beer .',
             ],
+            'language': [
+                'en',
+                'en',
+            ],
         },
         {
             'text': [
                 'I like beer .',
                 'Ich mag Bier .'
+            ],
+            'language': [
+                'en',
+                'en',
             ],
         },
         {
@@ -848,6 +977,12 @@ def test_mining_data_loader(src, trg, threshold, k,
             'alignment': [
                 [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4),
                  (5, 5), (6, 6), (7, 7), (8, 8), (9, 9)],
+            ],
+            'source_language': [
+                'en',
+            ],
+            'target_language': [
+                'en',
             ],
         },
     ),
@@ -917,6 +1052,15 @@ def test_unsupervised_trainer(src_train, trg_train, eval,
                 'I like beer . 6',
                 'I like beer . 7',
             ],
+            'language': [
+                'en',
+                'en',
+                'en',
+                'en',
+                'en',
+                'en',
+                'en',
+            ],
         },
         3,
     ),
@@ -930,6 +1074,15 @@ def test_unsupervised_trainer(src_train, trg_train, eval,
                 'I like beer . 5',
                 'I like beer . 6',
                 'I like beer . 7',
+            ],
+            'language': [
+                'en',
+                'en',
+                'en',
+                'en',
+                'en',
+                'en',
+                'en',
             ],
         },
         7,

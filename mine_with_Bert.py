@@ -105,6 +105,12 @@ class DataTrainingArguments:
     trg_dataset_path: str = field(
         metadata={"help": "The path of the target dataset to use."}
     )
+    src_language: str = field(
+        metadata={"help": "The path of the source dataset to use."}
+    )
+    trg_language: str = field(
+        metadata={"help": "The path of the target dataset to use."}
+    )
     output: str = field(
         metadata={"help": "Path to save mined word pairs"}
     )
@@ -177,6 +183,11 @@ def main():
             'test': data_args.src_dataset_path
         }
     )
+    src_dataset = src_dataset['test']
+    src_dataset = src_dataset.add_column(
+        'language',
+        [data_args.src_language] * len(src_dataset),
+    )
     src_dataset = src_dataset.map(
         partial(tokenize_function_for_unlabeled, tokenizer),
         batched=True,
@@ -185,13 +196,17 @@ def main():
         load_from_cache_file=False,
         desc="Running tokenizer on the source dataset",
     )
-    src_dataset = src_dataset['test']
 
     trg_dataset = load_dataset(
         'text',
         data_files={
             'test': data_args.trg_dataset_path
         }
+    )
+    trg_dataset = trg_dataset['test']
+    trg_dataset = trg_dataset.add_column(
+        'language',
+        [data_args.trg_language] * len(trg_dataset),
     )
     trg_dataset = trg_dataset.map(
         partial(tokenize_function_for_unlabeled, tokenizer),
@@ -201,7 +216,6 @@ def main():
         load_from_cache_file=False,
         desc="Running tokenizer on the target dataset",
     )
-    trg_dataset = trg_dataset['test']
 
     data_collator = DataCollatorForUnlabeledData(
         tokenizer=tokenizer,

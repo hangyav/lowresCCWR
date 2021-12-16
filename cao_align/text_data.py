@@ -56,6 +56,7 @@ class Text(datasets.GeneratorBasedBuilder):
             description=_DESCRIPTION,
             features=datasets.Features({
                 "text": datasets.Value("string"),
+                "language": datasets.Value("string"),
             }),
             homepage="",
             citation=_CITATION,
@@ -73,11 +74,12 @@ class Text(datasets.GeneratorBasedBuilder):
                 name=datasets.Split.TRAIN,
                 gen_kwargs={
                     "filepath": path,
+                    "language": name
                 }
             ),
         ]
 
-    def _generate_examples(self, filepath):
+    def _generate_examples(self, filepath, language):
         with open(filepath) as fin:
             idx = 0
             for sent in fin:
@@ -89,5 +91,6 @@ class Text(datasets.GeneratorBasedBuilder):
 
                 yield idx, {
                     "text": sent,
+                    "language": language
                 }
                 idx += 1

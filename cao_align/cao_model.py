@@ -74,6 +74,8 @@ class BertForCaoAlign(BertPreTrainedModel):
         trg_attention_masks,
         src_alignments,
         trg_alignments,
+        src_language,
+        trg_language,
         include_clssep=True,
         return_dict=None,
         bert_base=None,
@@ -89,16 +91,20 @@ class BertForCaoAlign(BertPreTrainedModel):
                 src_attention_masks,
                 src_word_ids_lst,
                 src_special_word_masks,
+                src_language,
                 include_clssep,
                 self.bert,
+                is_target_language=False,
         )
         trg_features = self._process_sentences(
                 trg_input_ids,
                 trg_attention_masks,
                 trg_word_ids_lst,
                 trg_special_word_masks,
+                trg_language,
                 include_clssep,
                 self.bert,
+                is_target_language=True,
         )
 
         if bert_base is not None:
@@ -107,8 +113,10 @@ class BertForCaoAlign(BertPreTrainedModel):
                     trg_attention_masks,
                     trg_word_ids_lst,
                     trg_special_word_masks,
+                    trg_language,
                     include_clssep,
                     bert_base,
+                    is_target_language=False,
             )
 
             alignment_loss = F.mse_loss(
@@ -122,9 +130,9 @@ class BertForCaoAlign(BertPreTrainedModel):
             )
         else:
             regularization_loss = torch.zeros(
-                (1, 1), dtype=torch.float).to(self.bert.device)
+                (1, 1), dtype=torch.float, device=self.bert.device)
             alignment_loss = torch.zeros(
-                (1, 1), dtype=torch.float).to(self.bert.device)
+                (1, 1), dtype=torch.float, device=self.bert.device)
 
         total_loss = alignment_loss + regularization_loss
 
@@ -137,7 +145,14 @@ class BertForCaoAlign(BertPreTrainedModel):
         )
 
     def _process_sentences(self, input_ids, attention_masks, word_ids_lst,
-                           special_word_masks, include_clssep, model):
+                           special_word_masks, language, include_clssep, model,
+                           is_target_language=True):
+        """
+        is_target_language: depends on the model type, but generally indicates
+        if the representations should be transformed spcific to the language
+        (no if True), e.g., language specific mapping layer. For this class the
+        parameter doesn't make a difference.
+        """
         features = model(
             input_ids,
             attention_mask=attention_masks,
@@ -174,8 +189,10 @@ class BertForCaoAlign(BertPreTrainedModel):
                     src_batch['attention_masks'].to(self.bert.device),
                     src_batch['word_ids_lst'],
                     src_batch['special_word_masks'].to(self.bert.device),
+                    src_batch['language'],
                     False,
                     self.bert,
+                    is_target_language=False,
             )
             batch_res = dict()
             trg_data_loader = DataLoader(
@@ -191,8 +208,10 @@ class BertForCaoAlign(BertPreTrainedModel):
                         trg_batch['attention_masks'].to(self.bert.device),
                         trg_batch['word_ids_lst'],
                         trg_batch['special_word_masks'].to(self.bert.device),
+                        trg_batch['language'],
                         False,
                         self.bert,
+                        is_target_language=True,
                 )
 
                 for src_sent_idx, (src_sent_feats, src_batch_item) in enumerate(
@@ -325,6 +344,8 @@ class BertForCaoAlignMLM(BertForCaoAlign):
         trg_attention_masks,
         src_alignments,
         trg_alignments,
+        src_language,
+        trg_language,
         include_clssep=True,
         return_dict=None,
         bert_base=None,
@@ -346,6 +367,8 @@ class BertForCaoAlignMLM(BertForCaoAlign):
             trg_attention_masks,
             src_alignments,
             trg_alignments,
+            src_language,
+            trg_language,
             include_clssep,
             return_dict,
             bert_base,
@@ -443,6 +466,54 @@ class BertForCaoAlignMLM(BertForCaoAlign):
         )
 
 
+class BertForLinerLayearAlign(BertForCaoAlign):
+
+    def __init__(self, config, num_languages=10):
+        super().__init__(config)
+        # this is needed because it has to be added to the optimizer in the beginning
+        self.per_language_layers = nn.ParameterList([
+            self._create_language_layer()
+            for _ in range(num_languages)
+        ])
+        self.language_dict = dict()
+
+        for param in self.bert.parameters():
+            param.requires_grad = False
+
+    def _create_language_layer(self):
+        # TODO Should we add bias?
+        return nn.Parameter(torch.eye(self.config.hidden_size))
+
+    def _get_language_layer(self, language):
+        idx = self.language_dict.setdefault(language, len(self.language_dict))
+        return self.per_language_layers[idx]
+
+    def _process_sentences(self, input_ids, attention_masks, word_ids_lst,
+                           special_word_masks, language, include_clssep, model,
+                           is_target_language=True):
+        """
+        is_target_language: only source languages are aligned
+        """
+        features = super()._process_sentences(
+            input_ids,
+            attention_masks,
+            word_ids_lst,
+            special_word_masks,
+            language,
+            include_clssep,
+            model,
+            is_target_language,
+        )
+
+        if is_target_language:
+            return features
+
+        assert len(set(language)) == 1
+        layer = self._get_language_layer(language[0])
+
+        return features.matmul(layer)
+
+
 @dataclass
 class CaoAlignmentOutput(ModelOutput):
 
@@ -488,7 +559,7 @@ class SubwordToTokenStrategyBase():
 
         res = torch.zeros(
                 (features.shape[0], length, features.shape[2]),
-                dtype=features.dtype
+                dtype=features.dtype, device=features.device
         )
 
         self._process(res, features, word_ids_lsts, special_word_masks,
@@ -760,7 +831,7 @@ class CaoTrainer(Trainer):
                 'alignment_loss': outputs['alignment_loss'].item(),
                 'regularization_loss': outputs['regularization_loss'].item(),
             }
-            if type(model) == BertForCaoAlign:
+            if type(model) == BertForCaoAlign or type(model) == BertForLinerLayearAlign:
                 metrics['combined_alignment_loss'] = outputs['loss'].item()
             elif type(model) == BertForCaoAlignMLM:
                 metrics['combined_alignment_loss'] = outputs['combined_alignment_loss'].item()
@@ -877,11 +948,8 @@ class CaoTrainer(Trainer):
                     if 'loss' in k:
                         losses.setdefault(k, list()).append(v.item())
 
-            # FIXME for some reason output gets moved to the CPU
-            ann_1 = ann_1.to(self.model.device)
-            ann_2 = ann_2.to(self.model.device)
-            src_alignments = torch.tensor(src_alignments, dtype=int).to(self.model.device)
-            trg_alignments = torch.tensor(trg_alignments, dtype=int).to(self.model.device)
+            src_alignments = torch.tensor(src_alignments, dtype=int, device=self.model.device)
+            trg_alignments = torch.tensor(trg_alignments, dtype=int, device=self.model.device)
             del input
             del output
             torch.cuda.empty_cache()
@@ -986,9 +1054,9 @@ class CaoTrainer(Trainer):
                 final_idx_2.append(trg_alignments[i].cpu().numpy())
 
         final_idx_1 = torch.tensor(
-            final_idx_1, dtype=src_alignments.dtype).to(src_alignments.device)
+            final_idx_1, dtype=src_alignments.dtype, device=src_alignments.device)
         final_idx_2 = torch.tensor(
-            final_idx_2, dtype=trg_alignments.dtype).to(trg_alignments.device)
+            final_idx_2, dtype=trg_alignments.dtype, device=trg_alignments.device)
 
         ann_1 = ann_1[final_idx_1[:, 0], final_idx_1[:, 1]]
         ann_2 = ann_2[final_idx_2[:, 0], final_idx_2[:, 1]]

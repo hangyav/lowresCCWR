@@ -45,12 +45,14 @@ class DataCollatorForUnlabeledData:
 
         attention_masks = (special_word_masks != 2).type(torch.IntTensor)
         word_ids_lst = self._to_list(examples, 'word_ids_lst')
+        lang_lst = self._to_list(examples, 'language')
 
         return {
             'input_ids': input_ids,
             'attention_masks': attention_masks,
             'word_ids_lst': word_ids_lst,
             'special_word_masks': special_word_masks,
+            'language': lang_lst,
         }
 
     def _handle_input_ids(self, examples, col, max_len, default_value):
@@ -119,6 +121,8 @@ class DataCollatorForCaoAlignment(DataCollatorForUnlabeledData):
         src_word_ids_lst = self._to_list(examples, 'src_word_ids_lst')
         trg_word_ids_lst = self._to_list(examples, 'trg_word_ids_lst')
         alignment = self._to_list(examples, 'alignment')
+        src_lang_lst = self._to_list(examples, 'src_language')
+        trg_lang_lst = self._to_list(examples, 'trg_language')
 
         src_idxs, trg_idxs = DataCollatorForCaoAlignment.get_aligned_indices(
                 alignment,
@@ -140,6 +144,8 @@ class DataCollatorForCaoAlignment(DataCollatorForUnlabeledData):
             'trg_special_word_masks': trg_special_word_masks,
             'src_alignments': src_idxs,
             'trg_alignments': trg_idxs,
+            'src_language': src_lang_lst,
+            'trg_language': trg_lang_lst,
         }
 
     @staticmethod
@@ -330,6 +336,11 @@ class MiningDataLoader():
             src_dataset,
             tokenize_function_for_unlabeled,
         )
+        assert trg_dataset['language'][0] == 'en', ('Not implemented: In case'
+                                                    + 'of En as target'
+                                                    + 'language this needs to'
+                                                    + 'be handled in the'
+                                                    + 'models!!!')
         self._tokenized_trg_dataset = self._tokenize_dataset(
             trg_dataset,
             tokenize_function_for_unlabeled,
@@ -421,11 +432,15 @@ class MiningDataLoader():
         trg_sent_id = align_lst[0][2]
         src_sent = src_dataset['text'][src_sent_id]
         trg_sent = trg_dataset['text'][trg_sent_id]
+        src_lang = src_dataset['language'][src_sent_id]
+        trg_lang = trg_dataset['language'][trg_sent_id]
         alignments = [[align[1], align[3]] for align in align_lst]
         scores = [align[4] for align in align_lst]
 
         out_dict.setdefault('source', list()).append(src_sent)
         out_dict.setdefault('target', list()).append(trg_sent)
+        out_dict.setdefault('source_language', list()).append(src_lang)
+        out_dict.setdefault('target_language', list()).append(trg_lang)
         out_dict.setdefault('alignment', list()).append(alignments)
         out_dict.setdefault('score', list()).append(scores)
 
@@ -477,7 +492,6 @@ class MiningDataLoader():
         )
         return self._tmp_data_loader[0]
 
-
     def __iter__(self):
         return self._get_data_loader().__iter__()
 
@@ -487,12 +501,12 @@ def cat_tensors_with_padding(a, b, value=0):
     if diff > 0:
         shape = list(b.shape)
         shape[1] = diff
-        tmp = torch.ones(*shape) * value
+        tmp = torch.ones(*shape, device=b.device) * value
         b = torch.cat((b, tmp), 1)
     elif diff < 0:
         shape = list(a.shape)
         shape[1] = abs(diff)
-        tmp = torch.ones(*shape) * value
+        tmp = torch.ones(*shape, device=a.device) * value
         a = torch.cat((a, tmp), 1)
 
     return torch.cat((a, b), 0)
@@ -587,6 +601,11 @@ def tokenize_function_per_input(tokenizer, examples):
 def tokenize_function_for_parallel(tokenizer, examples):
     src = tokenize_function_per_input(tokenizer, examples['source'])
     trg = tokenize_function_per_input(tokenizer, examples['target'])
+    assert examples['target_language'][0] == 'en', ('Not implemented: In case'
+                                                    + 'of En as target'
+                                                    + 'language this needs to'
+                                                    + 'be handled in the'
+                                                    + 'models!!!')
     return {
         'src_input_ids': src['input_ids'],
         'src_word_ids_lst': src['word_ids_lst'],
@@ -595,8 +614,13 @@ def tokenize_function_for_parallel(tokenizer, examples):
         'trg_word_ids_lst': trg['word_ids_lst'],
         'trg_special_word_masks': trg['special_word_masks'],
         'alignment': examples['alignment'],
+        'src_language': examples['source_language'],
+        'trg_language': examples['target_language'],
     }
 
 
 def tokenize_function_for_unlabeled(tokenizer, examples):
-    return tokenize_function_per_input(tokenizer, examples['text'])
+    res = tokenize_function_per_input(tokenizer, examples['text'])
+    res['language'] = examples['language']
+
+    return res
