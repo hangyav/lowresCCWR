@@ -1,6 +1,8 @@
 import pytest
 import torch
 from functools import partial
+import copy
+
 import run_cao as rc
 from cao_align import cao_model as cm
 from cao_align import utils as cu
@@ -25,6 +27,11 @@ def bert_base():
 @pytest.fixture
 def align_bert():
     return cm.BertForCaoAlign.from_pretrained('bert-base-multilingual-cased')
+
+
+@pytest.fixture
+def linear_bert():
+    return cm.BertForLinerLayearAlign.from_pretrained('bert-base-multilingual-cased')
 
 
 @pytest.fixture
@@ -1103,3 +1110,79 @@ def test_data_sampler(data, num):
         assert len(sampled_dataset) == num
         assert len(sampled_dataset2) == num
         assert [t for t in sampled_dataset['text']] == [t for t in sampled_dataset2['text']]
+
+
+@pytest.mark.parametrize('train', [
+    (
+        {
+            'source': [
+                'I like beer .',
+                'I like beer .',
+            ],
+            'target': [
+                'I like beer .',
+                'Ich mag Bier .'
+            ],
+            'alignment': [
+                [(0, 0), (1, 1), (2, 2), (3, 3)],
+                [(0, 0), (1, 1), (2, 2), (3, 3)],
+            ],
+            'source_language': [
+                'de',
+                'de',
+            ],
+            'target_language': [
+                'en',
+                'en',
+            ]
+        }
+    ),
+])
+def test_freezed_linear(train,
+                        bert_base, linear_bert,
+                        tokenizer_bert_multilingual_cased):
+    clone_model = copy.deepcopy(linear_bert)
+    collator = cu.DataCollatorForCaoAlignment(
+        tokenizer=tokenizer_bert_multilingual_cased,
+        max_length=linear_bert.bert.embeddings.position_embeddings.num_embeddings,
+        include_clssep=True,
+    )
+    train_dataset = Dataset.from_dict(train)
+    train_dataset = train_dataset.map(
+        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased),
+        batched=True,
+        num_proc=1,
+        remove_columns=train_dataset.column_names,
+        load_from_cache_file=False,
+        desc="Running tokenizer on every text in dataset",
+    )
+    train_dataset = cu.SizedMultiDataset({'test': train_dataset})
+    trainer = cm.CaoTrainer(
+        model=linear_bert,
+        args=rc.MyTrainingArguments(
+            detailed_logging=True,
+            output_dir='/tmp',
+            logging_steps=1,
+            save_steps=1000,
+            num_train_epochs=1,
+            per_device_train_batch_size=1,
+        ),
+        train_dataset=train_dataset,
+        tokenizer=tokenizer_bert_multilingual_cased,
+        data_collator=collator,
+        bert_base=bert_base,
+        include_clssep=rc.ModelArguments().include_clssep,
+    )
+    trainer.train()
+
+    for param, clone_param in zip(
+            linear_bert.bert.named_parameters(),
+            clone_model.bert.named_parameters()
+    ):
+        assert torch.all(torch.eq(param[1], clone_param[1])), f'{param[0]} - {clone_param[0]}'
+
+    for param, clone_param in zip(
+        linear_bert._get_language_layer('de').named_parameters(),
+        clone_model._get_language_layer('de').named_parameters(),
+    ):
+        assert not torch.all(torch.eq(param[1], clone_param[1])), f'{param[0]} - {clone_param[0]}'

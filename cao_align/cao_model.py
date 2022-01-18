@@ -116,7 +116,7 @@ class BertForCaoAlign(BertPreTrainedModel):
                     trg_language,
                     include_clssep,
                     bert_base,
-                    is_target_language=False,
+                    is_target_language=True,
             )
 
             alignment_loss = F.mse_loss(
@@ -466,12 +466,31 @@ class BertForCaoAlignMLM(BertForCaoAlign):
         )
 
 
+class LinearEye(nn.Module):
+
+    def __init__(self, hidden_size, bias=False):
+        super().__init__()
+
+        w = torch.eye(hidden_size)
+        w = w + torch.rand_like(w) * 0.01
+        self.weight = nn.Parameter(w)
+
+        if bias:
+            self.bias = nn.Parameter(torch.rand(hidden_size) * 0.01)
+        else:
+            self.register_parameter('bias', None)
+
+    def forward(self, input):
+        return F.linear(input, self.weight, self.bias)
+
+
 class BertForLinerLayearAlign(BertForCaoAlign):
 
     def __init__(self, config, num_languages=10):
         super().__init__(config)
-        # this is needed because it has to be added to the optimizer in the beginning
-        self.per_language_layers = nn.ParameterList([
+        # this is needed because it has to be added to the optimizer in the
+        # beginning
+        self.per_language_layers = nn.ModuleList([
             self._create_language_layer()
             for _ in range(num_languages)
         ])
@@ -480,9 +499,78 @@ class BertForLinerLayearAlign(BertForCaoAlign):
         for param in self.bert.parameters():
             param.requires_grad = False
 
+    def forward(
+        self,
+        src_input_ids,
+        src_word_ids_lst,
+        src_special_word_masks,
+        trg_input_ids,
+        trg_word_ids_lst,
+        trg_special_word_masks,
+        src_attention_masks,
+        trg_attention_masks,
+        src_alignments,
+        trg_alignments,
+        src_language,
+        trg_language,
+        include_clssep=True,
+        return_dict=None,
+        bert_base=None,
+    ):
+        return_dict = return_dict if return_dict is not None \
+                else self.config.use_return_dict
+
+        if not return_dict:
+            raise NotImplementedError('What to return here?')
+
+        src_features = self._process_sentences(
+                src_input_ids,
+                src_attention_masks,
+                src_word_ids_lst,
+                src_special_word_masks,
+                src_language,
+                include_clssep,
+                self.bert,
+                is_target_language=False,
+        )
+        trg_features = self._process_sentences(
+                trg_input_ids,
+                trg_attention_masks,
+                trg_word_ids_lst,
+                trg_special_word_masks,
+                trg_language,
+                include_clssep,
+                self.bert,
+                is_target_language=True,
+        )
+
+        # only in case of training
+        if bert_base is not None:
+            alignment_loss = F.mse_loss(
+                    src_features[src_alignments[:, 0], src_alignments[:, 1]],
+                    #  trg_features_base[trg_alignments[:, 0], trg_alignments[:, 1]]
+                    trg_features[trg_alignments[:, 0], trg_alignments[:, 1]]
+            )
+
+        else:
+            alignment_loss = torch.zeros(
+                (1, 1), dtype=torch.float, device=self.bert.device)
+
+        regularization_loss = torch.zeros(
+            (1, 1), dtype=torch.float, device=self.bert.device)
+        total_loss = alignment_loss
+
+        return CaoAlignmentOutput(
+                alignment_loss=alignment_loss,
+                regularization_loss=regularization_loss,
+                loss=total_loss,
+                src_hidden_states=src_features,
+                trg_hidden_states=trg_features,
+        )
+
     def _create_language_layer(self):
-        # TODO Should we add bias?
-        return nn.Parameter(torch.eye(self.config.hidden_size))
+        return LinearEye(self.config.hidden_size, bias=True)
+        #  return nn.Linear(self.config.hidden_size, self.config.hidden_size, bias=True)
 
     def _get_language_layer(self, language):
         idx = self.language_dict.setdefault(language, len(self.language_dict))
@@ -505,13 +593,14 @@ class BertForLinerLayearAlign(BertForCaoAlign):
             is_target_language,
         )
 
-        if is_target_language:
-            return features
+        #  if is_target_language:
+        #      # This gives bad performance
+        #      return features
 
         assert len(set(language)) == 1
         layer = self._get_language_layer(language[0])
 
-        return features.matmul(layer)
+        return layer(features)
 
 
 @dataclass
@@ -900,9 +989,32 @@ class CaoTrainer(Trainer):
                 for k, v in self._evaluate_single_dataset(eval_dataloader, lang).items():
                     res[f'{metric_key_prefix}_{lang}_{k}'] = v
 
+            # aggregate scores
+            for key, value in list(res.items()):
+                if 'src2trg' not in key and 'trg2src' not in key:
+                    continue
+                # metric_key_prefix: eval, test
+                # lang_pair
+                # eval mode: context, noncontext
+                # direction: src2trg, trg2srsc
+                data = key.split('_')
+                res.setdefault(f'{data[0]}_avg_acc', list()).append(value)
+                res.setdefault(f'{data[0]}_{data[2]}_avg_acc', list()).append(value)
+            res[f'{metric_key_prefix}_avg_acc'] = np.mean(res[f'{metric_key_prefix}_avg_acc'])
+            res[f'{metric_key_prefix}_context_avg_acc'] = np.mean(res[f'{metric_key_prefix}_context_avg_acc'])
+            res[f'{metric_key_prefix}_noncontext_avg_acc'] = np.mean(res[f'{metric_key_prefix}_noncontext_avg_acc'])
+
             if model_training:
                 self.model.train()
             self.bert_base = self.bert_base.to(self.model.device)
+
+            self.control = self.callback_handler.on_evaluate(
+                self.args,
+                self.state,
+                self.control,
+                res
+            )
+
             return res
 
     def _evaluate_single_dataset(self, dataloader, lang):
@@ -971,7 +1083,7 @@ class CaoTrainer(Trainer):
                     ann_1,
                     ann_2,
                     pbar).items():
-                res[f'non_context_{k}'] = v
+                res[f'noncontext_{k}'] = v
 
             for k, v in losses.items():
                 res[k] = np.mean(v)

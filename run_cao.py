@@ -43,6 +43,7 @@ from transformers import (
     TrainingArguments,
     set_seed,
     BertModel,
+    EarlyStoppingCallback,
 )
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
@@ -291,6 +292,22 @@ class MyTrainingArguments(TrainingArguments):
             "help": "Options: forward, intersection"
         },
     )
+    early_stopping_patience: int = field(
+        default=-1,
+        metadata={
+            "help": ">=0 to set early stopping"
+        },
+    )
+    early_stopping_threshold: Optional[float] = field(
+        default=0.0,
+        metadata={
+            "help": "Denote how much the specified metric must improve to satisfy early stopping conditions."
+        },
+    )
+    metric_for_best_model: Optional[str] = field(
+        default='eval_avg_acc',
+        metadata={"help": "The metric to use to compare two different models."}
+    )
 
     def __post_init__(self):
         super().__post_init__()
@@ -299,6 +316,9 @@ class MyTrainingArguments(TrainingArguments):
 
         if self.mining_sample_per_step == -1:
             self.mining_sample_per_step = None
+
+        if self.early_stopping_patience >= 0:
+            self.load_best_model_at_end = True
 
 
 def setup():
@@ -618,6 +638,13 @@ def get_trainer(model_args, data_args, training_args, tokenizer, model,
     #      lr_lambda,
     #  )
     #  trainer = Trainer(
+    callbacks = []
+    if training_args.early_stopping_patience >= 0:
+        callbacks.append(EarlyStoppingCallback(
+            training_args.early_stopping_patience,
+            training_args.early_stopping_threshold,
+        ))
+
     if data_args.data_mode == 'supervised':
         trainer = CaoTrainer(
             model=model,
@@ -628,6 +655,7 @@ def get_trainer(model_args, data_args, training_args, tokenizer, model,
             data_collator=data_collator,
             bert_base=model_base,
             include_clssep=model_args.include_clssep,
+            callbacks=callbacks,
             #  optimizers=(optimizer, scheduler),
         )
     elif data_args.data_mode == 'mining':
@@ -641,6 +669,7 @@ def get_trainer(model_args, data_args, training_args, tokenizer, model,
             bert_base=model_base,
             include_clssep=model_args.include_clssep,
             language_pairs=data_args.mining_language_pairs,
+            callbacks=callbacks,
             #  optimizers=(optimizer, scheduler),
         )
 
