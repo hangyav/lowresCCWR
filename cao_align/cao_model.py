@@ -175,6 +175,7 @@ class BertForCaoAlign(BertPreTrainedModel):
         output: [(src_sentence_idx, src_word_idx, trg_sentence_idx, trg_word_idx)]
         """
         res = list()
+        batch_res_lst = list()
         src_batch_offset = 0
         src_data_loader = DataLoader(
             src_data,
@@ -194,7 +195,6 @@ class BertForCaoAlign(BertPreTrainedModel):
                     self.bert,
                     is_target_language=False,
             )
-            batch_res = dict()
             trg_data_loader = DataLoader(
                 trg_data,
                 batch_size=batch_size,
@@ -224,6 +224,7 @@ class BertForCaoAlign(BertPreTrainedModel):
                     )
                     similarities[similarities < threshold] = 0.0
                     similarities[similarities > threshold_max] = 0.0
+                    similarities = similarities.to('cpu')
 
                     #  zero out elements which belong to a src or trg token
                     #  which is a PAD
@@ -240,10 +241,9 @@ class BertForCaoAlign(BertPreTrainedModel):
                         # index[0]: trg_sent_idx
                         # index[1]: src_word_idx
                         # index[2]: trg_word_idx
-                        batch_res.setdefault(
-                            (src_sent_idx+src_batch_offset, index[1].item()),
-                            list()
-                        ).append((
+                        batch_res_lst.append((
+                            src_sent_idx+src_batch_offset,
+                            index[1].item(),
                             index[0].item()+trg_batch_offset,
                             index[2].item(),
                             similarities[index[0], index[1], index[2]].item(),
@@ -251,13 +251,24 @@ class BertForCaoAlign(BertPreTrainedModel):
 
                 trg_batch_offset += trg_data_loader.batch_size
 
-            for key, v in batch_res.items():
-                v = list(sorted(v, key=lambda x: x[2], reverse=True))[:k]
-                for item in v:
-                    res.append((key[0], key[1], item[0], item[1], item[2]))
-
             src_batch_offset += src_data_loader.batch_size
 
+        res_tmp = dict()
+        for item in batch_res_lst:
+            # item[0]: src_sent_idx
+            # item[1]: src_word_ids
+            # item[2]: trg_sent_idx
+            # item[3]: trg_word_idx
+            # item[4]: similarity
+            res_tmp.setdefault((item[0], item[1]), list()).append((
+                item[2],
+                item[3],
+                item[4],
+            ))
+        for key, v in res_tmp.items():
+            v = list(sorted(v, key=lambda x: x[2], reverse=True))[:k]
+            for item in v:
+                res.append((key[0], key[1], item[0], item[1], item[2]))
         return list(sorted(res, key=lambda x: (x[0], x[2], x[1], x[3])))
 
     def mine_intersection_word_pairs(self, src_data, trg_data, threshold,
