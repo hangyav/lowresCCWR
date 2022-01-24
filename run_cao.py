@@ -186,7 +186,7 @@ class DataTrainingArguments:
         },
     )
     preprocessing_num_workers: Optional[int] = field(
-        default=None,
+        default=1,
         metadata={"help": "The number of processes to use for the preprocessing."},
     )
     pad_to_max_length: bool = field(
@@ -197,21 +197,21 @@ class DataTrainingArguments:
         },
     )
     max_train_samples: Optional[int] = field(
-        default=None,
+        default=-1,
         metadata={
             "help": "For debugging purposes or quicker training, truncate the number of training examples to this "
             "value if set."
         },
     )
     max_eval_samples: Optional[int] = field(
-        default=None,
+        default=-1,
         metadata={
             "help": "For debugging purposes or quicker training, truncate the number of evaluation examples to this "
             "value if set."
         },
     )
     max_mining_samples: Optional[int] = field(
-        default=None,
+        default=-1,
         metadata={
             "help": "Unsupervised data can be large. Only read n from the head."
         },
@@ -451,6 +451,9 @@ def get_model_components(model_args, data_args, training_args):
             else:
                 raise f'Align method not supported: {training_args.align_method}'
         else:
+            if training_args.align_method == 'linear':
+                raise NotImplementedError('MLM with linear mapping is not implemented yet!')
+
             model = BertForCaoAlignMLM.from_pretrained(
                 model_args.model_name_or_path,
                 from_tf=bool(".ckpt" in model_args.model_name_or_path),

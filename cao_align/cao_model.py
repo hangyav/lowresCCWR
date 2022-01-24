@@ -1125,6 +1125,7 @@ class CaoTrainer(Trainer):
         return {
             'src2trg': acc_1,
             'trg2src': acc_2,
+            'avg': np.mean([acc_1, acc_2])
         }
 
     def _evaluate_retrival_context(self, src_alignments, trg_alignments, ann_1,
