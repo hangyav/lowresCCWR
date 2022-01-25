@@ -43,7 +43,7 @@ from cao_align.utils import (
     MultiDataLoader,
     cat_tensors_with_padding,
     detokenize,
-    sentence_batch_cosine_similarity,
+    batch_batch_cosine_similarity,
     MiningDataLoader,
     DataCollatorForCaoAlignment,
 )
@@ -214,49 +214,42 @@ class BertForCaoAlign(BertPreTrainedModel):
                         is_target_language=True,
                 )
 
-                for src_sent_idx, (src_sent_feats, src_batch_item) in enumerate(
-                        zip(src_batch_features, src_batch)
-                ):
-                    # TODO can we eliminate the loop above?
-                    similarities = sentence_batch_cosine_similarity(
-                        src_sent_feats,
-                        trg_batch_features,
-                    )
-                    similarities[similarities < threshold] = 0.0
-                    similarities[similarities > threshold_max] = 0.0
-                    similarities = similarities.to('cpu')
+                similarities = batch_batch_cosine_similarity(
+                    src_batch_features,
+                    trg_batch_features,
+                )
+                similarities[similarities < threshold] = 0.0
+                similarities[similarities > threshold_max] = 0.0
+                similarities = similarities.detach().to('cpu')
 
-                    #  zero out elements which belong to a src or trg token
-                    #  which is a PAD
-                    #  XXX below is buggy/not finished. But we don't need it
-                    #  actually, they don't get mined since cos of zero vector
-                    #  is low
-                    #  src_non_pad_indices = src_sent_feats.sum(dim=-1) != 0.0
-                    #  similarities[:, src_non_pad_indices, :] = 0.0
-                    #  trg_non_pad_indices = trg_batch_features.sum(dim=-1) != 0.0
-                    #  similarities[trg_non_pad_indices.unsqueeze(
-                    #      1).repeat(1, similarities.shape[1], 1)] = 0.0
+                similarities = similarities.transpose(1, 2)
+                # XXX maybe eliminate loops by torch.flatten(start_dim=)
+                for src_sent_idx, src_sent_sim in enumerate(similarities):
+                    for src_word_idx, src_word_sim in enumerate(src_sent_sim):
+                        # [num_trg_sents, num_trg_words]
+                        shape = src_word_sim.shape
+                        src_word_sim = src_word_sim.flatten()
+                        sims, indices = src_word_sim.topk(min(k, src_word_sim.shape[0]))
+                        for idx, sim in zip(indices, sims):
+                            if sim <= 0.0:
+                                continue
+                            trg_sent_idx = idx.item() // shape[1]
+                            trg_word_idx = idx.item() % shape[1]
 
-                    for index in similarities.nonzero():
-                        # index[0]: trg_sent_idx
-                        # index[1]: src_word_idx
-                        # index[2]: trg_word_idx
-                        batch_res_lst.append((
-                            src_sent_idx+src_batch_offset,
-                            index[1].item(),
-                            index[0].item()+trg_batch_offset,
-                            index[2].item(),
-                            similarities[index[0], index[1], index[2]].item(),
-                        ))
-
+                            batch_res_lst.append((
+                                src_sent_idx + src_batch_offset,
+                                src_word_idx,
+                                trg_sent_idx + trg_batch_offset,
+                                trg_word_idx,
+                                sim.item(),
+                            ))
                 trg_batch_offset += trg_data_loader.batch_size
-
             src_batch_offset += src_data_loader.batch_size
 
         res_tmp = dict()
         for item in batch_res_lst:
             # item[0]: src_sent_idx
-            # item[1]: src_word_ids
+            # item[1]: src_word_idx
             # item[2]: trg_sent_idx
             # item[3]: trg_word_idx
             # item[4]: similarity

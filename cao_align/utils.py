@@ -549,6 +549,23 @@ def sentence_batch_cosine_similarity(sentence, batch):
     return res
 
 
+def batch_batch_cosine_similarity(batch1, batch2):
+    """
+    Embeddings in a batch1: num_batch_sentences1 x num_batch_words1 x emb_dim
+    Embeddings in a batch2: num_batch_sentences2 x num_batch_words2 x emb_dim
+
+    output: num_batch_sentences1 x num_batch_sentences2 x num_batch_words1
+            x num_batch_words2
+    """
+    batch1 = normalize_matrix(batch1)
+    batch2 = normalize_matrix(batch2)
+
+    res = batch1.unsqueeze(0).transpose(0, 1).matmul(batch2.transpose(1, 2))
+    # Zero vectors (PAD) give nan values, set them to 0.0
+    res = res.nan_to_num()
+    return res
+
+
 def tokenize_function_per_input(tokenizer, examples):
     # this contains the subword token ids
     input_ids_lst = list()
