@@ -432,9 +432,15 @@ class MiningDataLoader():
         trg_sent_id = align_lst[0][2]
         src_sent = src_dataset['text'][src_sent_id]
         trg_sent = trg_dataset['text'][trg_sent_id]
+        src_len = len(src_sent.split())
+        trg_len = len(trg_sent.split())
         src_lang = src_dataset['language'][src_sent_id]
         trg_lang = trg_dataset['language'][trg_sent_id]
-        alignments = [[align[1], align[3]] for align in align_lst]
+        alignments = [
+            [align[1], align[3]]
+            for align in align_lst
+            if align[1] < src_len and align[3] < trg_len  # eliminate padding alignments
+        ]
         scores = [align[4] for align in align_lst]
 
         out_dict.setdefault('source', list()).append(src_sent)
@@ -455,11 +461,18 @@ class MiningDataLoader():
                         dataset['alignment'][i],
                         dataset['score'][i],
                     )):
-                        print(f'{get_color(idx)}{align[0]}:{s1[align[0]]}'
-                              + f' - {align[1]}:{s2[align[1]]}'
-                              + f' - {score}{reset_color}', file=fout)
-                        s1[align[0]] = f'{get_color(idx)}{s1[align[0]]}{reset_color}'
-                        s2[align[1]] = f'{get_color(idx)}{s2[align[1]]}{reset_color}'
+                        try:
+                            print(f'{get_color(idx)}{align[0]}:{s1[align[0]]}'
+                                  + f' - {align[1]}:{s2[align[1]]}'
+                                  + f' - {score}{reset_color}', file=fout)
+                            s1[align[0]] = f'{get_color(idx)}{s1[align[0]]}{reset_color}'
+                            s2[align[1]] = f'{get_color(idx)}{s2[align[1]]}{reset_color}'
+                        except Exception as e:
+                            print(s1)
+                            print(s2)
+                            print(align)
+                            print(score)
+                            raise e
 
                     print(' '.join(s1), file=fout)
                     print(' '.join(s2), file=fout)
