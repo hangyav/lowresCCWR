@@ -146,7 +146,7 @@ class BertForCaoAlign(BertPreTrainedModel):
 
     def _process_sentences(self, input_ids, attention_masks, word_ids_lst,
                            special_word_masks, language, include_clssep, model,
-                           is_target_language=True):
+                           is_target_language=False):
         """
         is_target_language: depends on the model type, but generally indicates
         if the representations should be transformed spcific to the language
@@ -167,6 +167,19 @@ class BertForCaoAlign(BertPreTrainedModel):
         )
 
         return features
+
+    def process_sentences(self, batch, include_clssep=True,
+                          is_target_language=False):
+        return self._process_sentences(
+                batch['input_ids'].to(self.bert.device),
+                batch['attention_masks'].to(self.bert.device),
+                batch['word_ids_lst'],
+                batch['special_word_masks'].to(self.bert.device),
+                batch['language'],
+                include_clssep,
+                self.bert,
+                is_target_language=False,
+        )
 
     def mine_word_pairs(self, src_data, trg_data, threshold, data_collator,
                         k=1, batch_size=16, threshold_max=100,

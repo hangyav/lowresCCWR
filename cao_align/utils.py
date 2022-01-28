@@ -654,3 +654,27 @@ def tokenize_function_for_unlabeled(tokenizer, examples):
     res['language'] = examples['language']
 
     return res
+
+
+def save_embeddings(embeddings, output, word_order=None):
+    with open(output, 'w') as fout:
+        num = len(embeddings)
+        dim = embeddings[next(embeddings.keys().__iter__())].shape[0]
+        print(f'{num} {dim}', file=fout)
+
+        if word_order is not None:
+            words = [
+                w
+                for w in word_order
+                if w in embeddings
+            ]
+        else:
+            words = embeddings.keys()
+
+        for w in words:
+            print('{} {}'.format(
+                    w,
+                    ' '.join(['%.6g' % x for x in embeddings[w]]),
+                ),
+                file=fout,
+            )
