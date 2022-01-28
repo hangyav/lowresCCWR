@@ -428,17 +428,15 @@ def get_model_components(model_args, data_args, training_args):
                     use_auth_token=True if model_args.use_auth_token else None,
                 )
             elif training_args.align_method == 'linear':
-                num_langs = len(
-                    {
+                langs = {
                         lang
                         for pair in data_args.dataset_config_name.split(',')
                         for lang in pair.split('-')
-                    } | {
-                        lang
-                        for pair in data_args.mining_language_pairs
-                        for lang in pair
-                    }
-                )
+                } | {
+                    lang
+                    for pair in data_args.mining_language_pairs
+                    for lang in pair
+                }
                 model = BertForLinerLayearAlign.from_pretrained(
                     model_args.model_name_or_path,
                     from_tf=bool(".ckpt" in model_args.model_name_or_path),
@@ -446,7 +444,7 @@ def get_model_components(model_args, data_args, training_args):
                     cache_dir=model_args.cache_dir,
                     revision=model_args.model_revision,
                     use_auth_token=True if model_args.use_auth_token else None,
-                    num_languages=num_langs,
+                    languages=langs,
                 )
             else:
                 raise f'Align method not supported: {training_args.align_method}'
@@ -480,20 +478,18 @@ def get_model_components(model_args, data_args, training_args):
             if training_args.align_method == 'full':
                 model = BertForCaoAlign.from_config(config)
             elif training_args.align_method == 'linear':
-                num_langs = len(
-                    {
+                langs = {
                         lang
                         for pair in data_args.dataset_config_name.split(',')
                         for lang in pair.split('-')
-                    } | {
-                        lang
-                        for pair in data_args.mining_language_pairs
-                        for lang in pair
-                    }
-                )
+                } | {
+                    lang
+                    for pair in data_args.mining_language_pairs
+                    for lang in pair
+                }
                 model = BertForLinerLayearAlign.from_config(
                     config,
-                    num_languages=num_langs,
+                    languages=langs,
                 )
             else:
                 raise f'Align method not supported: {training_args.align_method}'

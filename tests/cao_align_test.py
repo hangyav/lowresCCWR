@@ -31,7 +31,10 @@ def align_bert():
 
 @pytest.fixture
 def linear_bert():
-    return cm.BertForLinerLayearAlign.from_pretrained('bert-base-multilingual-cased')
+    return cm.BertForLinerLayearAlign.from_pretrained(
+        'bert-base-multilingual-cased',
+        languages={'en', 'de'}
+    )
 
 
 @pytest.fixture

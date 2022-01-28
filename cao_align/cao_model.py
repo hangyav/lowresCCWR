@@ -490,15 +490,14 @@ class LinearEye(nn.Module):
 
 class BertForLinerLayearAlign(BertForCaoAlign):
 
-    def __init__(self, config, num_languages=10):
+    def __init__(self, config, languages):
         super().__init__(config)
         # this is needed because it has to be added to the optimizer in the
         # beginning
-        self.per_language_layers = nn.ModuleList([
-            self._create_language_layer()
-            for _ in range(num_languages)
-        ])
-        self.language_dict = dict()
+        self.per_language_layers = nn.ModuleDict({
+            lang: self._create_language_layer()
+            for lang in languages
+        })
 
         for param in self.bert.parameters():
             param.requires_grad = False
@@ -577,8 +576,7 @@ class BertForLinerLayearAlign(BertForCaoAlign):
         #  return nn.Linear(self.config.hidden_size, self.config.hidden_size, bias=True)
 
     def _get_language_layer(self, language):
-        idx = self.language_dict.setdefault(language, len(self.language_dict))
-        return self.per_language_layers[idx]
+        return self.per_language_layers[language]
 
     def _process_sentences(self, input_ids, attention_masks, word_ids_lst,
                            special_word_masks, language, include_clssep, model,
