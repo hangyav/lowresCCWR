@@ -75,7 +75,7 @@ def align_mlm_bert():
 ])
 def test_tokenize_function_per_input(examples, expected,
                                      tokenizer_bert_multilingual_cased):
-    output = cu.tokenize_function_per_input(tokenizer_bert_multilingual_cased,
+    output = cu.tokenize_function_per_input(tokenizer_bert_multilingual_cased, 512,
                                             examples)
     assert [
             tokenizer_bert_multilingual_cased.convert_ids_to_tokens(ids)
@@ -295,7 +295,7 @@ def test_pipeline(examples, expected, equals,
     )
     dataset = Dataset.from_dict(examples)
     dataset = dataset.map(
-        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased),
+        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased, 512),
         batched=True,
         num_proc=1,
         remove_columns=dataset.column_names,
@@ -376,7 +376,7 @@ def test_trainer(train, eval,
     )
     train_dataset = Dataset.from_dict(train)
     train_dataset = train_dataset.map(
-        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased),
+        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased, 512),
         batched=True,
         num_proc=1,
         remove_columns=train_dataset.column_names,
@@ -386,7 +386,7 @@ def test_trainer(train, eval,
     train_dataset = cu.SizedMultiDataset({'test': train_dataset})
     eval_dataset = Dataset.from_dict(eval)
     eval_dataset = eval_dataset.map(
-        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased),
+        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased, 512),
         batched=True,
         num_proc=1,
         remove_columns=eval_dataset.column_names,
@@ -474,7 +474,7 @@ def test_trainer_mlm(train, eval,
     )
     train_dataset = Dataset.from_dict(train)
     train_dataset = train_dataset.map(
-        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased),
+        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased, 512),
         batched=True,
         num_proc=1,
         remove_columns=train_dataset.column_names,
@@ -484,7 +484,7 @@ def test_trainer_mlm(train, eval,
     train_dataset = cu.SizedMultiDataset({'test': train_dataset})
     eval_dataset = Dataset.from_dict(eval)
     eval_dataset = eval_dataset.map(
-        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased),
+        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased, 512),
         batched=True,
         num_proc=1,
         remove_columns=eval_dataset.column_names,
@@ -621,7 +621,7 @@ def test_mlm_pipeline(examples, expected, equals,
     )
     dataset = Dataset.from_dict(examples)
     dataset = dataset.map(
-        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased),
+        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased, 512),
         batched=True,
         num_proc=1,
         remove_columns=dataset.column_names,
@@ -764,7 +764,7 @@ def test_mining(src, trg, threshold, k, expected,
     )
     src_dataset = Dataset.from_dict(src)
     src_dataset = src_dataset.map(
-        partial(cu.tokenize_function_for_unlabeled, tokenizer_bert_multilingual_cased),
+        partial(cu.tokenize_function_for_unlabeled, tokenizer_bert_multilingual_cased, 512),
         batched=True,
         num_proc=1,
         remove_columns=src_dataset.column_names,
@@ -773,7 +773,7 @@ def test_mining(src, trg, threshold, k, expected,
     )
     trg_dataset = Dataset.from_dict(trg)
     trg_dataset = trg_dataset.map(
-        partial(cu.tokenize_function_for_unlabeled, tokenizer_bert_multilingual_cased),
+        partial(cu.tokenize_function_for_unlabeled, tokenizer_bert_multilingual_cased, 512),
         batched=True,
         num_proc=1,
         remove_columns=trg_dataset.column_names,
@@ -871,7 +871,7 @@ def test_intersection_mining(src, trg, threshold, k, expected,
     )
     src_dataset = Dataset.from_dict(src)
     src_dataset = src_dataset.map(
-        partial(cu.tokenize_function_for_unlabeled, tokenizer_bert_multilingual_cased),
+        partial(cu.tokenize_function_for_unlabeled, tokenizer_bert_multilingual_cased, 512),
         batched=True,
         num_proc=1,
         remove_columns=src_dataset.column_names,
@@ -880,7 +880,7 @@ def test_intersection_mining(src, trg, threshold, k, expected,
     )
     trg_dataset = Dataset.from_dict(trg)
     trg_dataset = trg_dataset.map(
-        partial(cu.tokenize_function_for_unlabeled, tokenizer_bert_multilingual_cased),
+        partial(cu.tokenize_function_for_unlabeled, tokenizer_bert_multilingual_cased, 512),
         batched=True,
         num_proc=1,
         remove_columns=trg_dataset.column_names,
@@ -1014,7 +1014,7 @@ def test_unsupervised_trainer(src_train, trg_train, eval,
     lang_pairs = [('src', 'trg'), ('trg', 'src')]
     eval_dataset = Dataset.from_dict(eval)
     eval_dataset = eval_dataset.map(
-        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased),
+        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased, 512),
         batched=True,
         num_proc=1,
         remove_columns=eval_dataset.column_names,
@@ -1152,7 +1152,7 @@ def test_freezed_linear(train,
     )
     train_dataset = Dataset.from_dict(train)
     train_dataset = train_dataset.map(
-        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased),
+        partial(cu.tokenize_function_for_parallel, tokenizer_bert_multilingual_cased, 512),
         batched=True,
         num_proc=1,
         remove_columns=train_dataset.column_names,

@@ -307,7 +307,8 @@ class MiningDataLoader():
                  threshold, parallel_collator, k=1, mine_batch_size=None,
                  dataloader_num_workers=0, dataloader_pin_memory=True,
                  sample_for_mining=None, threshold_max=100, log_dir=None,
-                 mining_method='intersection', num_dataset_iterations=1):
+                 mining_method='intersection', num_dataset_iterations=1,
+                 max_seq_length=None):
         self.dataset = (src_dataset, trg_dataset)
         self.batch_size = batch_size
         self.model = model
@@ -325,6 +326,7 @@ class MiningDataLoader():
         self.num_dataset_iterations = num_dataset_iterations
         assert mining_method in self.mine_fns, f'Method {mining_method} not supported'
         self.mining_method = mining_method
+        self.max_seq_length = max_seq_length
 
         self._unlabeled_collator = DataCollatorForUnlabeledData(
             tokenizer=tokenizer,
@@ -349,7 +351,7 @@ class MiningDataLoader():
 
     def _tokenize_dataset(self, dataset, tok_fv):
         return dataset.map(
-            partial(tok_fv, self.tokenizer),
+            partial(tok_fv, self.tokenizer, self.max_seq_length),
             batched=True,
             num_proc=self.dataloader_num_workers if self.dataloader_num_workers else 1,
             remove_columns=dataset.column_names,
@@ -579,7 +581,7 @@ def batch_batch_cosine_similarity(batch1, batch2):
     return res
 
 
-def tokenize_function_per_input(tokenizer, examples):
+def tokenize_function_per_input(tokenizer, max_seq_length, examples):
     # this contains the subword token ids
     input_ids_lst = list()
     # contains lists of input_ids indices to show which subword tokens
@@ -606,6 +608,10 @@ def tokenize_function_per_input(tokenizer, examples):
 
             cur_len = len(input_ids)
             ids_len = len(ids)
+
+            if max_seq_length is not None and cur_len + ids_len > max_seq_length - 1:  # -1 for [SEP] at the end
+                break
+
             input_ids.extend(ids)
 
             word_ids_lst.append(list(range(cur_len, cur_len+ids_len)))
@@ -628,9 +634,9 @@ def tokenize_function_per_input(tokenizer, examples):
     return result
 
 
-def tokenize_function_for_parallel(tokenizer, examples):
-    src = tokenize_function_per_input(tokenizer, examples['source'])
-    trg = tokenize_function_per_input(tokenizer, examples['target'])
+def tokenize_function_for_parallel(tokenizer, max_seq_length, examples):
+    src = tokenize_function_per_input(tokenizer, max_seq_length, examples['source'])
+    trg = tokenize_function_per_input(tokenizer, max_seq_length, examples['target'])
     assert examples['target_language'][0] == 'en', ('Not implemented: In case'
                                                     + 'of En as target'
                                                     + 'language this needs to'
@@ -649,8 +655,8 @@ def tokenize_function_for_parallel(tokenizer, examples):
     }
 
 
-def tokenize_function_for_unlabeled(tokenizer, examples):
-    res = tokenize_function_per_input(tokenizer, examples['text'])
+def tokenize_function_for_unlabeled(tokenizer, max_seq_length, examples):
+    res = tokenize_function_per_input(tokenizer, max_seq_length, examples['text'])
     res['language'] = examples['language']
 
     return res

@@ -24,12 +24,11 @@ https://huggingface.co/models?filter=masked-lm
 import logging
 import os
 import sys
+import numpy as np
 from functools import partial
 from dataclasses import dataclass, field
 from typing import Optional
 
-#  from torch.optim import Adam
-#  from torch.optim.lr_scheduler import LambdaLR
 import datasets
 from datasets import load_dataset
 
@@ -56,12 +55,12 @@ from cao_align.utils import (
     MultiDataset,
     DataCollatorForCaoMLMAlignment,
     tokenize_function_for_parallel,
-    tokenize_function_for_unlabeled,
 )
 from cao_align.cao_model import (
     BertForCaoAlign,
     BertForCaoAlignMLM,
     BertForLinerLayearAlign,
+    BertForPretrainedLinearLayerAlign,
 )
 from cao_align.cao_model import CaoTrainer, UnsupervisedTrainer
 
@@ -308,6 +307,10 @@ class MyTrainingArguments(TrainingArguments):
         default='eval_avg_acc',
         metadata={"help": "The metric to use to compare two different models."}
     )
+    pretrained_alignments: Optional[str] = field(
+        default=None,
+        metadata={"help": "Alignments built with eg. VecMap. Format: [<lang>=<path>,...]"},
+    )
 
     def __post_init__(self):
         super().__post_init__()
@@ -319,6 +322,14 @@ class MyTrainingArguments(TrainingArguments):
 
         if self.early_stopping_patience >= 0:
             self.load_best_model_at_end = True
+
+        if self.pretrained_alignments is not None:
+            assert self.align_method == 'linear', 'Pretrained alignments are only supported with linear mode'
+
+            self.pretrained_alignments = {
+                item.split('=')[0]: item.split('=')[1]
+                for item in self.pretrained_alignments.split(',')
+            }
 
 
 def setup():
@@ -437,15 +448,32 @@ def get_model_components(model_args, data_args, training_args):
                     for pair in data_args.mining_language_pairs
                     for lang in pair
                 }
-                model = BertForLinerLayearAlign.from_pretrained(
-                    model_args.model_name_or_path,
-                    from_tf=bool(".ckpt" in model_args.model_name_or_path),
-                    config=config,
-                    cache_dir=model_args.cache_dir,
-                    revision=model_args.model_revision,
-                    use_auth_token=True if model_args.use_auth_token else None,
-                    languages=langs,
-                )
+                if training_args.pretrained_alignments is None:
+                    model = BertForLinerLayearAlign.from_pretrained(
+                        model_args.model_name_or_path,
+                        from_tf=bool(".ckpt" in model_args.model_name_or_path),
+                        config=config,
+                        cache_dir=model_args.cache_dir,
+                        revision=model_args.model_revision,
+                        use_auth_token=True if model_args.use_auth_token else None,
+                        languages=langs,
+                    )
+                else:
+                    lang_map = {
+                        lang: np.load(path)
+                        for lang, path in training_args.pretrained_alignments.items()
+                    }
+
+                    model = BertForPretrainedLinearLayerAlign.from_pretrained(
+                        model_args.model_name_or_path,
+                        from_tf=bool(".ckpt" in model_args.model_name_or_path),
+                        config=config,
+                        cache_dir=model_args.cache_dir,
+                        revision=model_args.model_revision,
+                        use_auth_token=True if model_args.use_auth_token else None,
+                        languages=langs,
+                        language_mappings=lang_map,
+                    )
             else:
                 raise f'Align method not supported: {training_args.align_method}'
         else:
@@ -474,32 +502,33 @@ def get_model_components(model_args, data_args, training_args):
 
     else:
         logger.info("Training new model from scratch")
-        if not data_args.do_mlm:
-            if training_args.align_method == 'full':
-                model = BertForCaoAlign.from_config(config)
-            elif training_args.align_method == 'linear':
-                langs = {
-                        lang
-                        for pair in data_args.dataset_config_name.split(',')
-                        for lang in pair.split('-')
-                } | {
-                    lang
-                    for pair in data_args.mining_language_pairs
-                    for lang in pair
-                }
-                model = BertForLinerLayearAlign.from_config(
-                    config,
-                    languages=langs,
-                )
-            else:
-                raise f'Align method not supported: {training_args.align_method}'
-        else:
-            model = BertForCaoAlignMLM.from_config(
-                config,
-                src_mlm_weight=data_args.src_mlm_weight,
-                trg_mlm_weight=data_args.trg_mlm_weight,
-            )
-        model_base = BertModel.from_config(config)
+        raise NotImplemented('Training from scratch not supported!')
+        #  if not data_args.do_mlm:
+        #      if training_args.align_method == 'full':
+        #          model = BertForCaoAlign.from_config(config)
+        #      elif training_args.align_method == 'linear':
+        #          langs = {
+        #                  lang
+        #                  for pair in data_args.dataset_config_name.split(',')
+        #                  for lang in pair.split('-')
+        #          } | {
+        #              lang
+        #              for pair in data_args.mining_language_pairs
+        #              for lang in pair
+        #          }
+        #          model = BertForLinerLayearAlign.from_config(
+        #              config,
+        #              languages=langs,
+        #          )
+        #      else:
+        #          raise f'Align method not supported: {training_args.align_method}'
+        #  else:
+        #      model = BertForCaoAlignMLM.from_config(
+        #          config,
+        #          src_mlm_weight=data_args.src_mlm_weight,
+        #          trg_mlm_weight=data_args.trg_mlm_weight,
+        #      )
+        #  model_base = BertModel.from_config(config)
 
     model.resize_token_embeddings(len(tokenizer))
     model_base.resize_token_embeddings(len(tokenizer))
@@ -564,7 +593,8 @@ def get_parallel_datasets(data_args, model_args, training_args, tokenizer, model
     with training_args.main_process_first(desc="dataset map tokenization"):
         tokenized_datasets = {
             k: v.map(
-                partial(tokenize_function_for_parallel, tokenizer),
+                #  partial(tokenize_function_for_parallel, tokenizer, max_seq_length),
+                partial(tokenize_function_for_parallel, tokenizer, None),
                 batched=True,
                 num_proc=data_args.preprocessing_num_workers,
                 remove_columns=column_names,
@@ -595,7 +625,8 @@ def get_parallel_datasets(data_args, model_args, training_args, tokenizer, model
             pad_to_multiple_of_8=False,
         )
 
-    return train_dataset, eval_dataset, test_dataset, data_collator
+    #  return train_dataset, eval_dataset, test_dataset, data_collator, max_seq_length
+    return train_dataset, eval_dataset, test_dataset, data_collator, None
 
 
 def get_mining_datasets(data_args, model_args, tokenizer, model):
@@ -621,7 +652,7 @@ def get_mining_datasets(data_args, model_args, tokenizer, model):
 
 def get_trainer(model_args, data_args, training_args, tokenizer, model,
                 model_base, train_dataset, eval_dataset, mining_dataset,
-                data_collator):
+                data_collator, max_seq_length):
     # Initialize our Trainer
     #  optimizer = Adam([param for param in model.parameters() if
     #                    param.requires_grad], lr=training_args.learning_rate,
@@ -670,6 +701,7 @@ def get_trainer(model_args, data_args, training_args, tokenizer, model,
             language_pairs=data_args.mining_language_pairs,
             callbacks=callbacks,
             #  optimizers=(optimizer, scheduler),
+            max_seq_length=max_seq_length,
         )
 
     return trainer
@@ -735,7 +767,7 @@ def main():
         training_args,
     )
 
-    train_dataset, eval_dataset, test_dataset, data_collator = get_parallel_datasets(
+    train_dataset, eval_dataset, test_dataset, data_collator, max_seq_length = get_parallel_datasets(
         data_args,
         model_args,
         training_args,
@@ -750,7 +782,7 @@ def main():
 
     trainer = get_trainer(model_args, data_args, training_args, tokenizer,
                           model, model_base, train_dataset, eval_dataset,
-                          mining_dataset, data_collator)
+                          mining_dataset, data_collator, max_seq_length)
 
     run(data_args, training_args, trainer, last_checkpoint, train_dataset,
         eval_dataset, test_dataset)

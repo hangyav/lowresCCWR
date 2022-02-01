@@ -178,7 +178,7 @@ class BertForCaoAlign(BertPreTrainedModel):
                 batch['language'],
                 include_clssep,
                 self.bert,
-                is_target_language=False,
+                is_target_language=is_target_language,
         )
 
     def mine_word_pairs(self, src_data, trg_data, threshold, data_collator,
@@ -485,15 +485,17 @@ class BertForCaoAlignMLM(BertForCaoAlign):
 
 class LinearEye(nn.Module):
 
-    def __init__(self, hidden_size, bias=False):
+    def __init__(self, hidden_size, bias=False, add_random=True):
         super().__init__()
 
         w = torch.eye(hidden_size)
-        w = w + torch.rand_like(w) * 0.01
+        if add_random:
+            w = w + torch.rand_like(w) * 0.01
         self.weight = nn.Parameter(w)
 
         if bias:
-            self.bias = nn.Parameter(torch.rand(hidden_size) * 0.01)
+            rand_value = 0.01 if add_random else 0.0
+            self.bias = nn.Parameter(torch.rand(hidden_size) * rand_value)
         else:
             self.register_parameter('bias', None)
 
@@ -508,7 +510,7 @@ class BertForLinerLayearAlign(BertForCaoAlign):
         # this is needed because it has to be added to the optimizer in the
         # beginning
         self.per_language_layers = nn.ModuleDict({
-            lang: self._create_language_layer()
+            lang: self._create_language_layer(lang)
             for lang in languages
         })
 
@@ -584,9 +586,8 @@ class BertForLinerLayearAlign(BertForCaoAlign):
                 trg_hidden_states=trg_features,
         )
 
-    def _create_language_layer(self):
+    def _create_language_layer(self, language):
         return LinearEye(self.config.hidden_size, bias=True)
-        #  return nn.Linear(self.config.hidden_size, self.config.hidden_size, bias=True)
 
     def _get_language_layer(self, language):
         return self.per_language_layers[language]
@@ -616,6 +617,29 @@ class BertForLinerLayearAlign(BertForCaoAlign):
         layer = self._get_language_layer(language[0])
 
         return layer(features)
+
+
+class BertForPretrainedLinearLayerAlign(BertForLinerLayearAlign):
+
+    def __init__(self, config, languages, language_mappings):
+        self.language_mappings = language_mappings
+        super().__init__(config, languages=languages)
+
+    def _create_language_layer(self, language):
+        if language in self.language_mappings:
+            layer = nn.Linear(
+                self.config.hidden_size,
+                self.config.hidden_size,
+                bias=False
+            )
+            layer.weight.data = torch.tensor(
+                self.language_mappings[language],
+                dtype=torch.float32,
+            )
+        else:
+            layer = LinearEye(self.config.hidden_size, bias=False, add_random=False)
+
+        return layer
 
 
 @dataclass
@@ -1243,6 +1267,7 @@ class UnsupervisedTrainer(CaoTrainer):
         bert_base: PreTrainedModel = None,
         include_clssep: Optional[bool] = True,
         language_pairs: List[Tuple[str, str]] = None,
+        max_seq_length=None,
     ):
         super().__init__(
             model,
@@ -1259,6 +1284,7 @@ class UnsupervisedTrainer(CaoTrainer):
             include_clssep,
         )
         self.language_pairs = language_pairs
+        self.max_seq_length = max_seq_length
 
     def get_train_dataloader(self):
         if self.train_dataset is None:
@@ -1279,6 +1305,7 @@ class UnsupervisedTrainer(CaoTrainer):
                 threshold_max=self.args.mining_threshold_max,
                 log_dir=self.args.logging_dir if self.args.detailed_logging else None,
                 mining_method=self.args.mining_method,
+                max_seq_length=self.max_seq_length,
             )
             for src, trg in self.language_pairs
         ]

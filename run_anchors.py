@@ -293,7 +293,8 @@ def get_raw_dataset_components(data_args):
 
     keyword_processor = KeywordProcessor(case_sensitive=True)
     for w in vocabulary:
-        keyword_processor.add_keyword(w)
+        if len(w) > 0:
+            keyword_processor.add_keyword(f' {w} ', w)
 
     vocabulary_map = dict()
     sentences = list()
@@ -315,7 +316,7 @@ def get_raw_dataset_components(data_args):
                         sent.index(kw),
                     ))
                     if len(vocabulary_map[kw]) >= data_args.max_samples_per_word:
-                        keyword_processor.remove_keyword(kw)
+                        keyword_processor.remove_keyword(f' {kw} ')
                         if len(keyword_processor.get_all_keywords()) == 0:
                             stop = True
                             break
@@ -356,6 +357,7 @@ def get_dataset(sentences, tokenizer, model, data_args):
         partial(
             tokenize_function_for_unlabeled,
             tokenizer,
+            max_seq_length,
         ),
         batched=True,
         num_proc=data_args.preprocessing_num_workers,
@@ -399,15 +401,18 @@ def run(model, dataset, data_collator, vocabulary_map, vocabulary, data_args,
             for i in range(features.shape[0]):
                 sent_idx = i + batch_offset
                 for w_pos, w in reversed_vocab_map[sent_idx]:
-                    emb_dict.setdefault(w, list()).append(
-                        features[i][w_pos].detach().to('cpu').numpy()
-                    )
+                    if w_pos < features.shape[1]:
+                        # too long sentences can be trimmed
+                        emb_dict.setdefault(w, list()).append(
+                            features[i][w_pos].detach().to('cpu').numpy()
+                        )
 
             batch_offset += model_args.batch_size
 
     res = {
         k: np.mean(v, axis=0)
         for k, v in emb_dict.items()
+        if len(v) > 0
     }
 
     logger.info('Saving anchors to: {}'.format(data_args.output_path))
