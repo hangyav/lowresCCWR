@@ -250,6 +250,29 @@ class DataCollatorForCaoMLMAlignment(DataCollatorForCaoAlignment):
         )
 
 
+class DataCollatorForNER(DataCollatorForUnlabeledData):
+
+    def __init__(self, tokenizer, max_length, label_pad_token_id=-100):
+        super().__init__(tokenizer, max_length, True)
+        self.label_pad_token_id = label_pad_token_id
+
+    def __call__(self, examples) -> Dict[str, torch.Tensor]:
+        res = super().__call__(examples)
+
+        max_len = max([len(item) for item in res['word_ids_lst']])
+        labels = torch.zeros((len(examples), max_len), dtype=int)
+        labels = labels.fill_(self.label_pad_token_id)
+
+        for i, example in enumerate(examples):
+            labels[i, :len(example['labels'])] = torch.tensor(
+                example['labels'],
+                dtype=int
+            )
+        res['labels'] = labels
+
+        return res
+
+
 class MultiDataset():
 
     def __init__(self, datasets):
@@ -599,7 +622,10 @@ def tokenize_function_per_input(tokenizer, max_seq_length, examples):
         word_ids_lst.append([0])
         special_word_masks.append(1)
 
-        for word in example.split():
+        if type(example) == str:
+            example = example.split()
+
+        for word in example:
             tokens = tokenizer.tokenize(word)
             if len(tokens) == 0:
                 # XXX why doesn't this happen automatically?
@@ -658,6 +684,38 @@ def tokenize_function_for_parallel(tokenizer, max_seq_length, examples):
 def tokenize_function_for_unlabeled(tokenizer, max_seq_length, examples):
     res = tokenize_function_per_input(tokenizer, max_seq_length, examples['text'])
     res['language'] = examples['language']
+
+    return res
+
+
+def tokenizer_function_for_ner(tokenizer, text_column_name, label_column_name,
+                               label_to_id, max_seq_length, examples):
+    res = tokenize_function_per_input(
+        tokenizer,
+        max_seq_length,
+        examples[text_column_name]
+    )
+    res['language'] = [examples['langs'][0][0]] * len(examples['langs'])
+
+    labels = []
+    for i, label in enumerate(examples[label_column_name]):
+        word_id_lsts = res['word_ids_lst'][i]
+        word_masks = res['special_word_masks'][i]
+        label_ids = []
+        word_pos = 0
+        for word_id_lst in word_id_lsts:
+            # Special tokens have a word mask of 1. We set the label
+            # to -100 so they are automatically ignored in the loss
+            # function.
+            if len(word_id_lst) == 1 and word_masks[word_id_lst[0]] == 1:
+                label_ids.append(-100)
+            else:
+                label_ids.append(label_to_id[label[word_pos]])
+                word_pos += 1
+
+        labels.append(label_ids)
+
+    res["labels"] = labels
 
     return res
 

@@ -502,7 +502,7 @@ def get_model_components(model_args, data_args, training_args):
 
     else:
         logger.info("Training new model from scratch")
-        raise NotImplemented('Training from scratch not supported!')
+        raise NotImplementedError('Training from scratch not supported!')
         #  if not data_args.do_mlm:
         #      if training_args.align_method == 'full':
         #          model = BertForCaoAlign.from_config(config)

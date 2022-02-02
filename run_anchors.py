@@ -291,10 +291,10 @@ def get_raw_dataset_components(data_args):
     with open(data_args.vocabulary_path) as fin:
         vocabulary = [w.strip() for w in fin]
 
-    keyword_processor = KeywordProcessor(case_sensitive=True)
+    keyword_processor = KeywordProcessor(case_sensitive=False)
     for w in vocabulary:
         if len(w) > 0:
-            keyword_processor.add_keyword(f' {w} ', w)
+            keyword_processor.add_keyword(w)
 
     vocabulary_map = dict()
     sentences = list()
@@ -307,19 +307,28 @@ def get_raw_dataset_components(data_args):
 
             if len(kws) > 0:
                 idx = len(sentences)
-                sentences.append(line)
                 sent = line.split()
 
+                sent_added = False
                 for kw in kws:
-                    vocabulary_map.setdefault(kw, list()).append((
-                        idx,
-                        sent.index(kw),
-                    ))
-                    if len(vocabulary_map[kw]) >= data_args.max_samples_per_word:
-                        keyword_processor.remove_keyword(f' {kw} ')
-                        if len(keyword_processor.get_all_keywords()) == 0:
-                            stop = True
-                            break
+                    try:
+                        vocabulary_map.setdefault(kw, list()).append((
+                            idx,
+                            sent.index(kw),
+                        ))
+                        sent_added = True
+                        if len(vocabulary_map[kw]) >= data_args.max_samples_per_word:
+                            keyword_processor.remove_keyword(kw)
+                            if len(keyword_processor.get_all_keywords()) == 0:
+                                stop = True
+                                break
+                    except Exception:
+                        # kw might not be in the sent list if it is part of
+                        # another word eg. self -> self-confidence. We just
+                        # ignore these.
+                        pass
+                if sent_added:
+                    sentences.append(line)
             if stop:
                 break
 

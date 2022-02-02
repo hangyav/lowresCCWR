@@ -21,7 +21,7 @@ from transformers import (
 from transformers.file_utils import ModelOutput
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.bert.modeling_bert import BertOnlyMLMHead
-from transformers.modeling_outputs import MaskedLMOutput
+from transformers.modeling_outputs import MaskedLMOutput, TokenClassifierOutput
 from transformers.training_args import TrainingArguments, ParallelMode
 from transformers.data.data_collator import DataCollator
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
@@ -640,6 +640,95 @@ class BertForPretrainedLinearLayerAlign(BertForLinerLayearAlign):
             layer = LinearEye(self.config.hidden_size, bias=False, add_random=False)
 
         return layer
+
+
+class BertForTokenClassification(BertPreTrainedModel):
+
+    def __init__(self, config, bert=None):
+        super().__init__(config)
+        self.num_labels = config.num_labels
+
+        self.bert = bert
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.classifier = nn.Linear(config.hidden_size, config.num_labels)
+
+        self.init_weights()
+
+        if self.bert is not None:
+            for param in self.bert.parameters():
+                param.requires_grad = False
+
+    def set_bert(self, new_bert):
+        self.bert = new_bert
+        if self.bert is not None:
+            for param in self.bert.parameters():
+                param.requires_grad = False
+
+    def forward(
+        self,
+        input_ids,
+        word_ids_lst,
+        special_word_masks,
+        attention_masks,
+        language,
+        labels=None,
+        return_dict=True,
+    ):
+        features = self.bert.process_sentences(
+            batch={
+                'input_ids': input_ids,
+                'word_ids_lst': word_ids_lst,
+                'special_word_masks': special_word_masks,
+                'attention_masks': attention_masks,
+                'language': language,
+            },
+            include_clssep=True,
+            is_target_language=False,
+        )
+        feature_masks = BertForTokenClassification._get_word_level_attention(
+            features,
+            word_ids_lst,
+        )
+        features = self.dropout(features)
+        logits = self.classifier(features)
+
+        loss = None
+        if labels is not None:
+            loss_fct = CrossEntropyLoss()
+            # Only keep active parts of the loss
+            if feature_masks is not None:
+                active_loss = feature_masks.view(-1) == 1
+                active_logits = logits.view(-1, self.num_labels)
+                active_labels = torch.where(
+                    active_loss,
+                    labels.view(-1),
+                    torch.tensor(loss_fct.ignore_index).type_as(labels)
+                )
+                loss = loss_fct(active_logits, active_labels)
+            else:
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+
+        if not return_dict:
+            raise "Not sure if this is good"
+            output = (logits,) + (features,)
+            return ((loss,) + output) if loss is not None else output
+
+        return TokenClassifierOutput(
+            loss=loss,
+            logits=logits,
+            # below causes memory issues
+            #  hidden_states=features,
+            #  attentions=feature_masks,
+        )
+
+    @staticmethod
+    def _get_word_level_attention(features, word_ids_lst):
+        res = torch.zeros(features.shape[:-1], dtype=int).to(features.device)
+
+        for i, lst in enumerate(word_ids_lst):
+            res[i, :len(lst)] = 1
+
+        return res
 
 
 @dataclass
