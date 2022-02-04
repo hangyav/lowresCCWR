@@ -627,15 +627,18 @@ class BertForPretrainedLinearLayerAlign(BertForLinerLayearAlign):
 
     def _create_language_layer(self, language):
         if language in self.language_mappings:
-            layer = nn.Linear(
+            layer = LinearEye(
                 self.config.hidden_size,
-                self.config.hidden_size,
-                bias=False
+                bias=False,
+                add_random=False,
             )
-            layer.weight.data = torch.tensor(
-                self.language_mappings[language],
-                dtype=torch.float32,
-            )
+            with torch.no_grad():
+                layer.weight.copy_(
+                    torch.tensor(
+                        self.language_mappings[language],
+                        dtype=torch.float32,
+                    )
+                )
         else:
             layer = LinearEye(self.config.hidden_size, bias=False, add_random=False)
 

@@ -39,6 +39,7 @@ from transformers import (
     Trainer,
     TrainingArguments,
     set_seed,
+    EarlyStoppingCallback,
 )
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
@@ -91,18 +92,27 @@ class ModelArguments:
             "with private models)."
         },
     )
-    languages: str = field(
+    languages: Optional[str] = field(
         default=None,
         metadata={
             "help": "Only when training from scratch. Space separated language"
             "ids for linear and pretrained."
         }
     )
+    pretrained_alignments: Optional[str] = field(
+        default=None,
+        metadata={"help": "Alignments built with eg. VecMap. Format: [<lang>=<path>,...]"},
+    )
 
     def __post_init__(self):
         if self.languages is not None:
             self.languages = set(self.languages.split(','))
 
+        if self.pretrained_alignments is not None:
+            self.pretrained_alignments = {
+                item.split('=')[0]: item.split('=')[1]
+                for item in self.pretrained_alignments.split(',')
+            }
 
 @dataclass
 class DataTrainingArguments:
@@ -198,12 +208,34 @@ class DataTrainingArguments:
             raise NotImplementedError('Lable all tokens is not supported!')
 
 
+@dataclass
+class MyTrainingArguments(TrainingArguments):
+    early_stopping_patience: int = field(
+        default=-1,
+        metadata={
+            "help": ">=0 to set early stopping"
+        },
+    )
+    early_stopping_threshold: Optional[float] = field(
+        default=0.0,
+        metadata={
+            "help": "Denote how much the specified metric must improve to satisfy early stopping conditions."
+        },
+    )
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        if self.early_stopping_patience >= 0:
+            self.load_best_model_at_end = True
+
+
 def setup():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, MyTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
@@ -380,18 +412,19 @@ def get_model_components(model_args, data_args, training_args, num_labels,
         # TODO this is not nice. Should refactor and put parameters to config.
         # But it will do for now
         sub_arch = config.subarchitecture
+        languages = set(config.language_layers) | {data_args.dataset_config_name}
 
         if sub_arch == BertForCaoAlign.__name__:
             aligned_model = BertForCaoAlign(config)
         elif sub_arch == BertForLinerLayearAlign.__name__:
             aligned_model = BertForLinerLayearAlign(
                 config,
-                config.language_layers
+                languages,
             )
         elif sub_arch == BertForPretrainedLinearLayerAlign.__name__:
             aligned_model = BertForPretrainedLinearLayerAlign(
                 config,
-                config.language_layers,
+                languages,
                 {},
             )
         else:
@@ -409,6 +442,7 @@ def get_model_components(model_args, data_args, training_args, num_labels,
     else:
         params = dict()
 
+        languages = set(model_args.languages) | {data_args.dataset_config_name}
         if arch == BertForLinerLayearAlign.__name__:
             aligned_model = BertForLinerLayearAlign.from_pretrained(
                 model_args.model_name_or_path,
@@ -417,9 +451,9 @@ def get_model_components(model_args, data_args, training_args, num_labels,
                 cache_dir=model_args.cache_dir,
                 revision=model_args.model_revision,
                 use_auth_token=True if model_args.use_auth_token else None,
-                languages=model_args.languages,
+                languages=languages,
             )
-            params['language_layers'] = list(model_args.languages)
+            params['language_layers'] = list(languages)
         elif arch == BertForPretrainedLinearLayerAlign.__name__:
             aligned_model = BertForPretrainedLinearLayerAlign.from_pretrained(
                 model_args.model_name_or_path,
@@ -428,10 +462,10 @@ def get_model_components(model_args, data_args, training_args, num_labels,
                 cache_dir=model_args.cache_dir,
                 revision=model_args.model_revision,
                 use_auth_token=True if model_args.use_auth_token else None,
-                languages=model_args.languages,
-                language_mappings={},
+                languages=languages,
+                language_mappings=model_args.pretrained_alignments,
             )
-            params['language_layers'] = list(model_args.languages)
+            params['language_layers'] = list(languages)
         else:
             # BertForCaoAlign or just Bert in general
             aligned_model = BertForCaoAlign.from_pretrained(
@@ -584,6 +618,13 @@ def run(data_args, training_args, tokenizer, model, last_checkpoint,
                 "accuracy": results["overall_accuracy"],
             }
 
+    callbacks = []
+    if training_args.early_stopping_patience >= 0:
+        callbacks.append(EarlyStoppingCallback(
+            training_args.early_stopping_patience,
+            training_args.early_stopping_threshold,
+        ))
+
     # Initialize our Trainer
     trainer = Trainer(
         model=model,
@@ -593,6 +634,7 @@ def run(data_args, training_args, tokenizer, model, last_checkpoint,
         tokenizer=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
+        callbacks=callbacks,
     )
 
     # Training

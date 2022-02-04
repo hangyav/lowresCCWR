@@ -187,6 +187,12 @@ class DataTrainingArguments:
             "help": "Number of embeddings to average per word."
         },
     )
+    lowercase: bool = field(
+        default=True,
+        metadata={
+            "help": "Lowercase text and vocabulary."
+        },
+    )
 
     def __post_init__(self):
         if self.max_samples_per_word == -1:
@@ -288,10 +294,11 @@ def get_model_components(model_args, data_args):
 
 
 def get_raw_dataset_components(data_args):
+    lw_fn = str.lower if data_args.lowercase else lambda x: x
     with open(data_args.vocabulary_path) as fin:
-        vocabulary = [w.strip() for w in fin]
+        vocabulary = [lw_fn(w.strip()) for w in fin]
 
-    keyword_processor = KeywordProcessor(case_sensitive=False)
+    keyword_processor = KeywordProcessor(case_sensitive=True)
     for w in vocabulary:
         if len(w) > 0:
             keyword_processor.add_keyword(w)
@@ -303,6 +310,8 @@ def get_raw_dataset_components(data_args):
     with open(data_args.dataset_path) as fin:
         for line in tqdm(fin, desc='Loading dataset'):
             line = line.strip()
+            line_orig = line
+            line = lw_fn(line)
             kws = set(keyword_processor.extract_keywords(line))
 
             if len(kws) > 0:
@@ -328,7 +337,7 @@ def get_raw_dataset_components(data_args):
                         # ignore these.
                         pass
                 if sent_added:
-                    sentences.append(line)
+                    sentences.append(line_orig)
             if stop:
                 break
 
