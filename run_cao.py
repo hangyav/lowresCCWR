@@ -153,6 +153,7 @@ class DataTrainingArguments:
         default="es-en,bg-en,fr-en,de-en,el-en,ne-en",
         metadata={"help": "The configuration name of the dataset to use (via the datasets library)."}
     )
+    force_dataset_download: bool = field(default=False, metadata={"help": "Download parallel data."})
     mining_dataset_name: Optional[str] = field(
         default='./cao_align/text_data.py',
         metadata={"help": "The name of the dataset to use (via the datasets library)."}
@@ -163,6 +164,7 @@ class DataTrainingArguments:
                   "to use (via the datasets library). These sets are used as"
                   "the source languages for mining."}
     )
+    force_mining_dataset_download: bool = field(default=False, metadata={"help": "Download monolingual data."})
     #  train_file: Optional[str] = field(default=None, metadata={"help": "The input training data file (a text file)."})
     #  validation_file: Optional[str] = field(
     #      default=None,
@@ -562,16 +564,19 @@ def get_parallel_datasets(data_args, model_args, training_args, tokenizer, model
                 'validation': load_validation,
                 'test': load_test,
             },
+            download_mode=('force_redownload'
+                           if data_args.force_mining_dataset_download and ci == 0
+                           else 'reuse_dataset_if_exists'),
         )
-        for config_name in config_names
+        for ci, config_name in enumerate(config_names)
     }
 
     # Preprocessing the datasets.
     # First we tokenize all the texts.
-    if training_args.do_train:
-        column_names = raw_datasets[config_names[0]]["train"].column_names
-    else:
-        column_names = raw_datasets[config_names[0]]["validation"].column_names
+    #  if training_args.do_train:
+    column_names = raw_datasets[config_names[0]]["train"].column_names
+    #  else:
+        #  column_names = raw_datasets[config_names[0]]["validation"].column_names
 
     if data_args.max_seq_length is None:
         max_seq_length = tokenizer.model_max_length
@@ -589,12 +594,17 @@ def get_parallel_datasets(data_args, model_args, training_args, tokenizer, model
             )
         max_seq_length = min(data_args.max_seq_length, tokenizer.model_max_length)
 
+    #  max_seq_length = None
+
+    def tokenize_fn(examples):
+        #  return tokenize_function_for_parallel(tokenizer, None, examples)
+        return tokenize_function_for_parallel(tokenizer, max_seq_length, examples)
+
     # Tokenizing data
     with training_args.main_process_first(desc="dataset map tokenization"):
         tokenized_datasets = {
             k: v.map(
-                #  partial(tokenize_function_for_parallel, tokenizer, max_seq_length),
-                partial(tokenize_function_for_parallel, tokenizer, None),
+                tokenize_fn,
                 batched=True,
                 num_proc=data_args.preprocessing_num_workers,
                 remove_columns=column_names,
@@ -602,7 +612,16 @@ def get_parallel_datasets(data_args, model_args, training_args, tokenizer, model
                 desc="Running tokenizer on every text in dataset",
             )
             for k, v in raw_datasets.items()
-    }
+        }
+        #  tokenized_datasets = {
+        #      k: v.filter(
+        #          lambda x: len(x['src_input_ids']) < max_seq_length and len(
+        #              x['trg_input_ids']) < max_seq_length,
+        #          num_proc=data_args.preprocessing_num_workers,
+        #          load_from_cache_file=not data_args.overwrite_cache,
+        #      )
+        #      for k, v in tokenized_datasets.items()
+        #  }
 
     train_dataset = SizedMultiDataset({v: k["train"] for v, k in tokenized_datasets.items()})
     eval_dataset = SizedMultiDataset({v: k["validation"] for v, k in tokenized_datasets.items()})
@@ -625,8 +644,7 @@ def get_parallel_datasets(data_args, model_args, training_args, tokenizer, model
             pad_to_multiple_of_8=False,
         )
 
-    #  return train_dataset, eval_dataset, test_dataset, data_collator, max_seq_length
-    return train_dataset, eval_dataset, test_dataset, data_collator, None
+    return train_dataset, eval_dataset, test_dataset, data_collator, max_seq_length
 
 
 def get_mining_datasets(data_args, model_args, tokenizer, model):
@@ -643,8 +661,11 @@ def get_mining_datasets(data_args, model_args, tokenizer, model):
             split={
                 'train': load_train,
             },
+            download_mode=('force_redownload'
+                           if data_args.force_mining_dataset_download and ci == 0
+                           else 'reuse_dataset_if_exists'),
         )
-        for config_name in config_names
+        for ci, config_name in enumerate(config_names)
     }
 
     return MultiDataset({v: k["train"] for v, k in raw_datasets.items()})
@@ -702,6 +723,7 @@ def get_trainer(model_args, data_args, training_args, tokenizer, model,
             callbacks=callbacks,
             #  optimizers=(optimizer, scheduler),
             max_seq_length=max_seq_length,
+            used_data_cache=not data_args.overwrite_cache
         )
 
     return trainer

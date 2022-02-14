@@ -22,6 +22,12 @@ LANGUAGE_PATHS = {
     'en': 'enwiki.tok.sample',
     'de': 'dewiki.tok.sample',
     'ne': 'wiki-ne.tok.sample',
+    'am': 'amwiki.tok.sample',
+    'ml': 'mlwiki.tok.sample',
+    'si': 'siwiki.tok.sample',
+    'sw': 'swwiki.tok.sample',
+    'mi': 'miwiki.tok.sample',
+    'sd': 'sdwiki.tok.sample',
 }
 
 MAX_SENTENCE_LENGTH = 128
@@ -35,7 +41,7 @@ class TextConfig(datasets.BuilderConfig):
         super(TextConfig, self).__init__(
             name=language,
             description=description,
-            version=datasets.Version("1.0.1", ""),
+            version=datasets.Version("1.0.2", ""),
             **kwargs,
         )
 
@@ -49,6 +55,12 @@ class Text(datasets.GeneratorBasedBuilder):
         TextConfig(language="en"),
         TextConfig(language="de"),
         TextConfig(language="ne"),
+        TextConfig(language="am"),
+        TextConfig(language="ml"),
+        TextConfig(language="si"),
+        TextConfig(language="sw"),
+        TextConfig(language="mi"),
+        TextConfig(language="sd"),
     ]
 
     def _info(self):

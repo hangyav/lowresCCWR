@@ -12,7 +12,7 @@ Dataset containing parallel sentence pairs and their alignments.
 _CITATION = """\
 """
 
-_DATA_URL = "https://www.cis.uni-muenchen.de/~hangyav/data/cao_data.zip"
+_DATA_URL = "https://www.cis.uni-muenchen.de/~hangyav/data/parallel_data.zip"
 
 # Tuple that describes a single pair of files with matching translations.
 # language_to_file is the map from language (2 letter string: example 'en')
@@ -22,13 +22,25 @@ TranslateData = collections.namedtuple("TranslateData", ["url", "language_to_fil
 
 
 LANGUAGE_PATHS = {
-    'es-en': ('europarl-v7.es-en.token.clean', 'europarl-v7.es-en.intersect'),
-    'bg-en': ('europarl-v7.bg-en.token.clean', 'europarl-v7.bg-en.intersect'),
-    'fr-en': ('europarl-v7.fr-en.token.clean', 'europarl-v7.fr-en.intersect'),
-    'de-en': ('europarl-v7.de-en.token.clean', 'europarl-v7.de-en.intersect'),
-    'el-en': ('europarl-v7.el-en.token.clean', 'europarl-v7.el-en.intersect'),
-    #  'ne-en': ('europarl-v7.ne-en.token.clean', 'europarl-v7.ne-en.intersect'),
-    'ne-en': ('final.data.clean.2.txt', 'final.data.clean.2.intersect'),
+    #  'es-en': ('europarl-v7.es-en.token.clean', 'europarl-v7.es-en.intersect'),
+    #  'bg-en': ('europarl-v7.bg-en.token.clean', 'europarl-v7.bg-en.intersect'),
+    #  'fr-en': ('europarl-v7.fr-en.token.clean', 'europarl-v7.fr-en.intersect'),
+    #  'de-en': ('europarl-v7.de-en.token.clean', 'europarl-v7.de-en.intersect'),
+    #  'el-en': ('europarl-v7.el-en.token.clean', 'europarl-v7.el-en.intersect'),
+    # # 'ne-en': ('europarl-v7.ne-en.token.clean', 'europarl-v7.ne-en.intersect'),
+    #  'ne-en': ('final.data.clean.2.txt', 'final.data.clean.2.intersect'),
+    'es-en': ('es-en.tokens', 'es-en.alignments'),
+    'bg-en': ('bg-en.tokens', 'bg-en.alignments'),
+    'fr-en': ('fr-en.tokens', 'fr-en.alignments'),
+    'de-en': ('de-en.tokens', 'de-en.alignments'),
+    'el-en': ('el-en.tokens', 'el-en.alignments'),
+    'ne-en': ('ne-en.tokens', 'ne-en.alignments'),
+    'am-en': ('am-en.tokens', 'am-en.alignments'),
+    'mi-en': ('mi-en.tokens', 'mi-en.alignments'),
+    'ml-en': ('ml-en.tokens', 'ml-en.alignments'),
+    'sd-en': ('sd-en.tokens', 'sd-en.alignments'),
+    'si-en': ('si-en.tokens', 'si-en.alignments'),
+    'sw-en': ('sw-en.tokens', 'sw-en.alignments'),
 }
 
 # Order of data is TEST, DEV, TRAIN
@@ -40,7 +52,12 @@ LANGUAGE_SENTENCES_NUMBERS = {
     'de-en': (1024, 1024, -1),
     'el-en': (1024, 1024, -1),
     'ne-en': (1024, 1024, -1),
-
+    'am-en': (1024, 1024, -1),
+    'mi-en': (1024, 1024, -1),
+    'ml-en': (1024, 1024, -1),
+    'sd-en': (1024, 1024, -1),
+    'si-en': (1024, 1024, -1),
+    'sw-en': (1024, 1024, -1),
 }
 
 MAX_SENTENCE_LENGTH = 128
@@ -63,7 +80,7 @@ class CaoConfig(datasets.BuilderConfig):
         super(CaoConfig, self).__init__(
             name=name,
             description=description,
-            version=datasets.Version("1.0.0", ""),
+            version=datasets.Version("1.0.1", ""),
             **kwargs,
         )
 
@@ -91,6 +108,24 @@ class Cao(datasets.GeneratorBasedBuilder):
         ),
         CaoConfig(
             language_pair=("ne", "en"),
+        ),
+        CaoConfig(
+            language_pair=("am", "en"),
+        ),
+        CaoConfig(
+            language_pair=("mi", "en"),
+        ),
+        CaoConfig(
+            language_pair=("ml", "en"),
+        ),
+        CaoConfig(
+            language_pair=("sd", "en"),
+        ),
+        CaoConfig(
+            language_pair=("si", "en"),
+        ),
+        CaoConfig(
+            language_pair=("sw", "en"),
         ),
     ]
 

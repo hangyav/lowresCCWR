@@ -108,6 +108,7 @@ class BertForCaoAlign(BertPreTrainedModel):
         )
 
         if bert_base is not None:
+            assert trg_language[0] == 'en', 'Non En target language not supported.'
             trg_features_base = self._process_sentences(
                     trg_input_ids,
                     trg_attention_masks,
@@ -505,7 +506,7 @@ class LinearEye(nn.Module):
 
 class BertForLinerLayearAlign(BertForCaoAlign):
 
-    def __init__(self, config, languages):
+    def __init__(self, config, languages,):
         super().__init__(config)
         # this is needed because it has to be added to the optimizer in the
         # beginning
@@ -647,7 +648,7 @@ class BertForPretrainedLinearLayerAlign(BertForLinerLayearAlign):
 
 class BertForTokenClassification(BertPreTrainedModel):
 
-    def __init__(self, config, bert=None):
+    def __init__(self, config, bert=None, freeze_bert_core=True):
         super().__init__(config)
         self.num_labels = config.num_labels
 
@@ -658,7 +659,21 @@ class BertForTokenClassification(BertPreTrainedModel):
         self.init_weights()
 
         if self.bert is not None:
-            for param in self.bert.parameters():
+            if freeze_bert_core:
+                parameters = self.bert.parameters()
+            else:
+                arch = type(self.bert).__name__
+                if arch == BertForCaoAlign.__name__:
+                    parameters = None
+                elif arch in [
+                        BertForLinerLayearAlign.__name__,
+                        BertForPretrainedLinearLayerAlign.__name__
+                ]:
+                    parameters = self.bert.per_language_layers.parameters()
+                else:
+                    raise f'Unsupported architecture: {arch}'
+
+            for param in parameters:
                 param.requires_grad = False
 
     def set_bert(self, new_bert):
@@ -1360,6 +1375,7 @@ class UnsupervisedTrainer(CaoTrainer):
         include_clssep: Optional[bool] = True,
         language_pairs: List[Tuple[str, str]] = None,
         max_seq_length=None,
+        use_data_cache=True,
     ):
         super().__init__(
             model,
@@ -1377,6 +1393,7 @@ class UnsupervisedTrainer(CaoTrainer):
         )
         self.language_pairs = language_pairs
         self.max_seq_length = max_seq_length
+        self.use_data_cache = use_data_cache
 
     def get_train_dataloader(self):
         if self.train_dataset is None:
@@ -1398,6 +1415,7 @@ class UnsupervisedTrainer(CaoTrainer):
                 log_dir=self.args.logging_dir if self.args.detailed_logging else None,
                 mining_method=self.args.mining_method,
                 max_seq_length=self.max_seq_length,
+                use_data_cache=self.use_data_cache,
             )
             for src, trg in self.language_pairs
         ]

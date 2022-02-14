@@ -1,7 +1,6 @@
 import os
 import logging
 from collections.abc import Sized
-from functools import partial
 from typing import Dict
 import numpy as np
 
@@ -331,7 +330,7 @@ class MiningDataLoader():
                  dataloader_num_workers=0, dataloader_pin_memory=True,
                  sample_for_mining=None, threshold_max=100, log_dir=None,
                  mining_method='intersection', num_dataset_iterations=1,
-                 max_seq_length=None):
+                 max_seq_length=None, use_data_cache=True):
         self.dataset = (src_dataset, trg_dataset)
         self.batch_size = batch_size
         self.model = model
@@ -350,6 +349,7 @@ class MiningDataLoader():
         assert mining_method in self.mine_fns, f'Method {mining_method} not supported'
         self.mining_method = mining_method
         self.max_seq_length = max_seq_length
+        self.use_data_cache = use_data_cache
 
         self._unlabeled_collator = DataCollatorForUnlabeledData(
             tokenizer=tokenizer,
@@ -359,26 +359,43 @@ class MiningDataLoader():
 
         self._tokenized_src_dataset = self._tokenize_dataset(
             src_dataset,
-            tokenize_function_for_unlabeled,
+            #  tokenize_function_for_unlabeled,
+            self._tokenizer_fn_unlabeled,
         )
-        assert trg_dataset['language'][0] == 'en', ('Not implemented: In case'
-                                                    + 'of En as target'
-                                                    + 'language this needs to'
-                                                    + 'be handled in the'
-                                                    + 'models!!!')
+        #  assert trg_dataset['language'][0] == 'en', ('Not implemented: In case'
+        #                                              + ' of En as target'
+        #                                              + ' language this needs to'
+        #                                              + ' be handled in the'
+        #                                              + ' models!!!')
         self._tokenized_trg_dataset = self._tokenize_dataset(
             trg_dataset,
-            tokenize_function_for_unlabeled,
+            #  tokenize_function_for_unlabeled,
+            self._tokenizer_fn_unlabeled,
         )
         self._tmp_data_loader = None
 
+    def _tokenizer_fn_unlabeled(self, examples):
+        return tokenize_function_for_unlabeled(
+            self.tokenizer,
+            self.max_seq_length,
+            examples,
+        )
+
+    def _tokenizer_fn_parallel(self, examples):
+        return tokenize_function_for_parallel(
+            self.tokenizer,
+            self.max_seq_length,
+            examples,
+        )
+
     def _tokenize_dataset(self, dataset, tok_fv):
         return dataset.map(
-            partial(tok_fv, self.tokenizer, self.max_seq_length),
+            #  partial(tok_fv, self.tokenizer, self.max_seq_length),
+            tok_fv,
             batched=True,
             num_proc=self.dataloader_num_workers if self.dataloader_num_workers else 1,
             remove_columns=dataset.column_names,
-            load_from_cache_file=False,
+            load_from_cache_file=self.use_data_cache,
         )
 
     @staticmethod
@@ -512,7 +529,8 @@ class MiningDataLoader():
             dataset = self._mine()
             dataset = self._tokenize_dataset(
                 dataset,
-                tokenize_function_for_parallel
+                #  tokenize_function_for_parallel
+                self._tokenizer_fn_parallel,
             )
 
             data_loader = DataLoader(
@@ -663,11 +681,16 @@ def tokenize_function_per_input(tokenizer, max_seq_length, examples):
 def tokenize_function_for_parallel(tokenizer, max_seq_length, examples):
     src = tokenize_function_per_input(tokenizer, max_seq_length, examples['source'])
     trg = tokenize_function_per_input(tokenizer, max_seq_length, examples['target'])
-    assert examples['target_language'][0] == 'en', ('Not implemented: In case'
-                                                    + 'of En as target'
-                                                    + 'language this needs to'
-                                                    + 'be handled in the'
-                                                    + 'models!!!')
+    #  assert examples['target_language'][0] == 'en', ('Not implemented: In case'
+    #                                                  + ' of En as target'
+    #                                                  + ' language this needs to'
+    #                                                  + ' be handled in the'
+    #                                                  + ' models!!!')
+    alignments = filter_alignment(
+        src['word_ids_lst'],
+        trg['word_ids_lst'],
+        examples['alignment'],
+    )
     return {
         'src_input_ids': src['input_ids'],
         'src_word_ids_lst': src['word_ids_lst'],
@@ -675,10 +698,26 @@ def tokenize_function_for_parallel(tokenizer, max_seq_length, examples):
         'trg_input_ids': trg['input_ids'],
         'trg_word_ids_lst': trg['word_ids_lst'],
         'trg_special_word_masks': trg['special_word_masks'],
-        'alignment': examples['alignment'],
+        #  'alignment': examples['alignment'],
+        'alignment': alignments,
         'src_language': examples['source_language'],
         'trg_language': examples['target_language'],
     }
+
+
+def filter_alignment(src_word_ids_lst, trg_word_ids_lst, alignemnts):
+    res = list()
+    for src_lst, trg_lst, alignment in zip(src_word_ids_lst, trg_word_ids_lst, alignemnts):
+        # -2 to compensate [CLS] and [SEP]
+        num_src_word = len(src_lst) - 2
+        num_trg_word = len(trg_lst) - 2
+        res.append([
+            [src_a, trg_a]
+            for src_a, trg_a in alignment
+            if src_a < num_src_word and trg_a < num_trg_word
+        ])
+
+    return np.array(res)
 
 
 def tokenize_function_for_unlabeled(tokenizer, max_seq_length, examples):

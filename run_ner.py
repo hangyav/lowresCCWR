@@ -103,6 +103,12 @@ class ModelArguments:
         default=None,
         metadata={"help": "Alignments built with eg. VecMap. Format: [<lang>=<path>,...]"},
     )
+    freeze_bert_core: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to freeze model core parameters."
+        },
+    )
 
     def __post_init__(self):
         if self.languages is not None:
@@ -412,23 +418,24 @@ def get_model_components(model_args, data_args, training_args, num_labels,
         # TODO this is not nice. Should refactor and put parameters to config.
         # But it will do for now
         sub_arch = config.subarchitecture
-        languages = set(config.language_layers) | {data_args.dataset_config_name}
 
         if sub_arch == BertForCaoAlign.__name__:
             aligned_model = BertForCaoAlign(config)
-        elif sub_arch == BertForLinerLayearAlign.__name__:
-            aligned_model = BertForLinerLayearAlign(
-                config,
-                languages,
-            )
-        elif sub_arch == BertForPretrainedLinearLayerAlign.__name__:
-            aligned_model = BertForPretrainedLinearLayerAlign(
-                config,
-                languages,
-                {},
-            )
         else:
-            raise f'Architecture not supported: {sub_arch}'
+            languages = set(config.language_layers) | {data_args.dataset_config_name}
+            if sub_arch == BertForLinerLayearAlign.__name__:
+                aligned_model = BertForLinerLayearAlign(
+                    config,
+                    languages,
+                )
+            elif sub_arch == BertForPretrainedLinearLayerAlign.__name__:
+                aligned_model = BertForPretrainedLinearLayerAlign(
+                    config,
+                    languages,
+                    {},
+                )
+            else:
+                raise f'Architecture not supported: {sub_arch}'
 
         model = BertForTokenClassification.from_pretrained(
             model_args.model_name_or_path,
@@ -438,12 +445,13 @@ def get_model_components(model_args, data_args, training_args, num_labels,
             revision=model_args.model_revision,
             use_auth_token=True if model_args.use_auth_token else None,
             bert=aligned_model,
+            freeze_bert_core=model_args.freeze_bert_core,
         )
     else:
         params = dict()
 
-        languages = set(model_args.languages) | {data_args.dataset_config_name}
         if arch == BertForLinerLayearAlign.__name__:
+            languages = set(model_args.languages) | {data_args.dataset_config_name}
             aligned_model = BertForLinerLayearAlign.from_pretrained(
                 model_args.model_name_or_path,
                 from_tf=bool(".ckpt" in model_args.model_name_or_path),
@@ -455,6 +463,7 @@ def get_model_components(model_args, data_args, training_args, num_labels,
             )
             params['language_layers'] = list(languages)
         elif arch == BertForPretrainedLinearLayerAlign.__name__:
+            languages = set(model_args.languages) | {data_args.dataset_config_name}
             aligned_model = BertForPretrainedLinearLayerAlign.from_pretrained(
                 model_args.model_name_or_path,
                 from_tf=bool(".ckpt" in model_args.model_name_or_path),
@@ -477,7 +486,7 @@ def get_model_components(model_args, data_args, training_args, num_labels,
                 use_auth_token=True if model_args.use_auth_token else None,
             )
 
-        model = BertForTokenClassification(config)
+        model = BertForTokenClassification(config, freeze_bert_core=model_args.freeze_bert_core)
         model.set_bert(aligned_model)
         params['subarchitecture'] = type(aligned_model).__name__
         model.config.update(params)
