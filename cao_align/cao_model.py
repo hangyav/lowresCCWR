@@ -1376,6 +1376,8 @@ class UnsupervisedTrainer(CaoTrainer):
         language_pairs: List[Tuple[str, str]] = None,
         max_seq_length=None,
         use_data_cache=True,
+        data_processing_workers=0,
+        tokenized_train_dataset: Optional[Dataset] = None,
     ):
         super().__init__(
             model,
@@ -1394,6 +1396,8 @@ class UnsupervisedTrainer(CaoTrainer):
         self.language_pairs = language_pairs
         self.max_seq_length = max_seq_length
         self.use_data_cache = use_data_cache
+        self.data_processing_workers = data_processing_workers
+        self.tokenized_train_dataset = tokenized_train_dataset
 
     def get_train_dataloader(self):
         if self.train_dataset is None:
@@ -1403,6 +1407,8 @@ class UnsupervisedTrainer(CaoTrainer):
             MiningDataLoader(
                 self.train_dataset.datasets[src],
                 self.train_dataset.datasets[trg],
+                self.tokenized_train_dataset.datasets[src],
+                self.tokenized_train_dataset.datasets[trg],
                 self.args.per_device_train_batch_size,
                 self.model,
                 self.tokenizer,
@@ -1410,6 +1416,7 @@ class UnsupervisedTrainer(CaoTrainer):
                 self.data_collator,
                 self.args.mining_k,
                 self.args.mining_batch_size,
+                dataloader_num_workers=self.data_processing_workers,
                 sample_for_mining=self.args.mining_sample_per_step,
                 threshold_max=self.args.mining_threshold_max,
                 log_dir=self.args.logging_dir if self.args.detailed_logging else None,

@@ -325,13 +325,16 @@ class MiningDataLoader():
         'intersection': 'mine_intersection_word_pairs',
     }
 
-    def __init__(self, src_dataset, trg_dataset, batch_size, model, tokenizer,
+    def __init__(self, src_dataset, trg_dataset, tokenized_src_dataset,
+                 tokenized_trg_dataset, batch_size, model, tokenizer,
                  threshold, parallel_collator, k=1, mine_batch_size=None,
                  dataloader_num_workers=0, dataloader_pin_memory=True,
                  sample_for_mining=None, threshold_max=100, log_dir=None,
                  mining_method='intersection', num_dataset_iterations=1,
                  max_seq_length=None, use_data_cache=True):
         self.dataset = (src_dataset, trg_dataset)
+        self.tokenized_src_dataset = tokenized_src_dataset
+        self.tokenized_trg_dataset = tokenized_trg_dataset
         self.batch_size = batch_size
         self.model = model
         self.tokenizer = tokenizer
@@ -357,21 +360,6 @@ class MiningDataLoader():
             include_clssep=False,
         )
 
-        self._tokenized_src_dataset = self._tokenize_dataset(
-            src_dataset,
-            #  tokenize_function_for_unlabeled,
-            self._tokenizer_fn_unlabeled,
-        )
-        #  assert trg_dataset['language'][0] == 'en', ('Not implemented: In case'
-        #                                              + ' of En as target'
-        #                                              + ' language this needs to'
-        #                                              + ' be handled in the'
-        #                                              + ' models!!!')
-        self._tokenized_trg_dataset = self._tokenize_dataset(
-            trg_dataset,
-            #  tokenize_function_for_unlabeled,
-            self._tokenizer_fn_unlabeled,
-        )
         self._tmp_data_loader = None
 
     def _tokenizer_fn_unlabeled(self, examples):
@@ -390,7 +378,6 @@ class MiningDataLoader():
 
     def _tokenize_dataset(self, dataset, tok_fv):
         return dataset.map(
-            #  partial(tok_fv, self.tokenizer, self.max_seq_length),
             tok_fv,
             batched=True,
             num_proc=self.dataloader_num_workers if self.dataloader_num_workers else 1,
@@ -418,8 +405,8 @@ class MiningDataLoader():
         model_training = self.model.training
         self.model.eval()
 
-        tokenized_src_dataset = self._tokenized_src_dataset
-        tokenized_trg_dataset = self._tokenized_trg_dataset
+        tokenized_src_dataset = self.tokenized_src_dataset
+        tokenized_trg_dataset = self.tokenized_trg_dataset
         src_dataset = self.dataset[0]
         trg_dataset = self.dataset[1]
         if self.sample_for_mining:
@@ -529,7 +516,6 @@ class MiningDataLoader():
             dataset = self._mine()
             dataset = self._tokenize_dataset(
                 dataset,
-                #  tokenize_function_for_parallel
                 self._tokenizer_fn_parallel,
             )
 

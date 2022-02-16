@@ -25,7 +25,6 @@ import logging
 import os
 import sys
 import numpy as np
-from functools import partial
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -55,6 +54,7 @@ from cao_align.utils import (
     MultiDataset,
     DataCollatorForCaoMLMAlignment,
     tokenize_function_for_parallel,
+    tokenize_function_for_unlabeled,
 )
 from cao_align.cao_model import (
     BertForCaoAlign,
@@ -231,6 +231,13 @@ class DataTrainingArguments:
     def __post_init__(self):
         assert not self.do_mlm or self.src_mlm_weight != 0.0 or self.trg_mlm_weight != 0.0, \
             'Either source or target MLM weight should be none-zero!'
+
+        self.dataset_config_name = [
+            item
+            for item in self.dataset_config_name.split(',')
+            # TODO remove this when Hi parallel data is added
+            if 'hi' not in item
+        ]
 
         self.mining_language_pairs = [
             item.split('-')
@@ -443,7 +450,7 @@ def get_model_components(model_args, data_args, training_args):
             elif training_args.align_method == 'linear':
                 langs = {
                         lang
-                        for pair in data_args.dataset_config_name.split(',')
+                        for pair in data_args.dataset_config_name
                         for lang in pair.split('-')
                 } | {
                     lang
@@ -511,7 +518,7 @@ def get_model_components(model_args, data_args, training_args):
         #      elif training_args.align_method == 'linear':
         #          langs = {
         #                  lang
-        #                  for pair in data_args.dataset_config_name.split(',')
+        #                  for pair in data_args.dataset_config_name
         #                  for lang in pair.split('-')
         #          } | {
         #              lang
@@ -542,10 +549,7 @@ def get_model_components(model_args, data_args, training_args):
 
 def get_parallel_datasets(data_args, model_args, training_args, tokenizer, model):
     # Downloading and loading a dataset
-    #  raw_datasets = load_dataset(
-    #      data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir
-    #  )
-    config_names = data_args.dataset_config_name.split(',')
+    config_names = data_args.dataset_config_name
     load_train = 'train'
     load_validation = 'validation'
     load_test = 'test'
@@ -609,7 +613,7 @@ def get_parallel_datasets(data_args, model_args, training_args, tokenizer, model
                 num_proc=data_args.preprocessing_num_workers,
                 remove_columns=column_names,
                 load_from_cache_file=not data_args.overwrite_cache,
-                desc="Running tokenizer on every text in dataset",
+                desc=f"Running tokenizer on every text in dataset: {k}",
             )
             for k, v in raw_datasets.items()
         }
@@ -647,7 +651,8 @@ def get_parallel_datasets(data_args, model_args, training_args, tokenizer, model
     return train_dataset, eval_dataset, test_dataset, data_collator, max_seq_length
 
 
-def get_mining_datasets(data_args, model_args, tokenizer, model):
+def get_mining_datasets(training_args, data_args, model_args, tokenizer, model,
+                        max_seq_length):
     config_names = {lang for item in data_args.mining_language_pairs for lang in item}
     load_train = 'train'
     if data_args.max_mining_samples is not None:
@@ -668,12 +673,31 @@ def get_mining_datasets(data_args, model_args, tokenizer, model):
         for ci, config_name in enumerate(config_names)
     }
 
-    return MultiDataset({v: k["train"] for v, k in raw_datasets.items()})
+    dataset = MultiDataset({v: k["train"] for v, k in raw_datasets.items()})
+
+    def tokenize_fn(examples):
+        return tokenize_function_for_unlabeled(tokenizer, max_seq_length, examples)
+
+    # Tokenizing data
+    with training_args.main_process_first(desc="mining dataset map tokenization"):
+        tokenized_dataset = MultiDataset({
+            k: v.map(
+                tokenize_fn,
+                batched=True,
+                num_proc=data_args.preprocessing_num_workers,
+                remove_columns=v.column_names,
+                load_from_cache_file=not data_args.overwrite_cache,
+                desc=f"Running tokenizer on every text in dataset: {k}",
+            )
+            for k, v in dataset.datasets.items()
+        })
+
+    return dataset, tokenized_dataset
 
 
 def get_trainer(model_args, data_args, training_args, tokenizer, model,
                 model_base, train_dataset, eval_dataset, mining_dataset,
-                data_collator, max_seq_length):
+                tokenized_mining_dataset, data_collator, max_seq_length):
     # Initialize our Trainer
     #  optimizer = Adam([param for param in model.parameters() if
     #                    param.requires_grad], lr=training_args.learning_rate,
@@ -723,7 +747,10 @@ def get_trainer(model_args, data_args, training_args, tokenizer, model,
             callbacks=callbacks,
             #  optimizers=(optimizer, scheduler),
             max_seq_length=max_seq_length,
-            used_data_cache=not data_args.overwrite_cache
+            use_data_cache=not data_args.overwrite_cache,
+            #  data_processing_workers=data_args.preprocessing_num_workers,
+            data_processing_workers=0,
+            tokenized_train_dataset=tokenized_mining_dataset,
         )
 
     return trainer
@@ -798,13 +825,21 @@ def main():
     )
 
     mining_dataset = None
+    tokenized_mining_dataset = None
     if data_args.data_mode == 'mining':
-        mining_dataset = get_mining_datasets(data_args, model_args,
-                                             tokenizer, model)
+        mining_dataset, tokenized_mining_dataset = get_mining_datasets(
+            training_args,
+            data_args,
+            model_args,
+            tokenizer,
+            model,
+            max_seq_length,
+        )
 
     trainer = get_trainer(model_args, data_args, training_args, tokenizer,
                           model, model_base, train_dataset, eval_dataset,
-                          mining_dataset, data_collator, max_seq_length)
+                          mining_dataset, tokenized_mining_dataset,
+                          data_collator, max_seq_length)
 
     run(data_args, training_args, trainer, last_checkpoint, train_dataset,
         eval_dataset, test_dataset)

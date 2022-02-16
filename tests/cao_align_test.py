@@ -936,11 +936,29 @@ def test_mining_data_loader(src, trg, threshold, k,
         include_clssep=True,
     )
     src_dataset = Dataset.from_dict(src)
+    tokenized_src_dataset = src_dataset.map(
+        partial(cu.tokenize_function_for_unlabeled, tokenizer_bert_multilingual_cased, 512),
+        batched=True,
+        num_proc=1,
+        remove_columns=src_dataset.column_names,
+        load_from_cache_file=False,
+        desc="Running tokenizer on every text in dataset",
+    )
     trg_dataset = Dataset.from_dict(trg)
+    tokenized_trg_dataset = trg_dataset.map(
+        partial(cu.tokenize_function_for_unlabeled, tokenizer_bert_multilingual_cased, 512),
+        batched=True,
+        num_proc=1,
+        remove_columns=trg_dataset.column_names,
+        load_from_cache_file=False,
+        desc="Running tokenizer on every text in dataset",
+    )
 
     data_loader = cu.MiningDataLoader(
         src_dataset,
         trg_dataset,
+        tokenized_src_dataset,
+        tokenized_trg_dataset,
         1,
         align_bert,
         tokenizer_bert_multilingual_cased,
@@ -1011,6 +1029,17 @@ def test_unsupervised_trainer(src_train, trg_train, eval,
         'src': src_train_dataset,
         'trg': trg_train_dataset,
     })
+    tokenized_train_dataset = cu.MultiDataset({
+        k: v.map(
+            partial(cu.tokenize_function_for_unlabeled, tokenizer_bert_multilingual_cased, 512),
+            batched=True,
+            num_proc=1,
+            remove_columns=v.column_names,
+            load_from_cache_file=False,
+            desc=f"Running tokenizer on every text in dataset: {k}",
+        )
+        for k, v in train_dataset.datasets.items()
+    })
     lang_pairs = [('src', 'trg'), ('trg', 'src')]
     eval_dataset = Dataset.from_dict(eval)
     eval_dataset = eval_dataset.map(
@@ -1045,6 +1074,7 @@ def test_unsupervised_trainer(src_train, trg_train, eval,
         bert_base=bert_base,
         include_clssep=rc.ModelArguments().include_clssep,
         language_pairs=lang_pairs,
+        tokenized_train_dataset=tokenized_train_dataset,
     )
     trainer.train()
     trainer.evaluate()

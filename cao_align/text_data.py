@@ -28,6 +28,7 @@ LANGUAGE_PATHS = {
     'sw': 'swwiki.tok.sample',
     'mi': 'miwiki.tok.sample',
     'sd': 'sdwiki.tok.sample',
+    'hi': 'hiwiki.tok.sample',
 }
 
 MAX_SENTENCE_LENGTH = 128
@@ -61,6 +62,7 @@ class Text(datasets.GeneratorBasedBuilder):
         TextConfig(language="sw"),
         TextConfig(language="mi"),
         TextConfig(language="sd"),
+        TextConfig(language="hi"),
     ]
 
     def _info(self):
