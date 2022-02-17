@@ -43,6 +43,7 @@ from transformers import (
     Trainer,
     TrainingArguments,
     set_seed,
+    EarlyStoppingCallback,
 )
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
@@ -481,6 +482,17 @@ def main():
         pad_to_multiple_of=8 if pad_to_multiple_of_8 else None,
     )
 
+    callbacks = []
+    if training_args.max_steps <= 0:
+        callbacks.append(EarlyStoppingCallback(
+            5,  # early_stopping_patience,
+            0,  # early_stopping_threshold,
+        ))
+        training_args.max_steps = 999999999999
+        training_args.load_best_model_at_end = True
+        training_args.evaluation_strategy = 'steps'
+        if training_args.metric_for_best_model is None:
+            training_args.metric_for_best_model = 'eval_loss'
     # Initialize our Trainer
     trainer = Trainer(
         model=model,
@@ -489,6 +501,7 @@ def main():
         eval_dataset=eval_dataset if training_args.do_eval else None,
         tokenizer=tokenizer,
         data_collator=data_collator,
+        callbacks=callbacks,
     )
 
     # Training
