@@ -490,7 +490,6 @@ def main():
         ))
         training_args.max_steps = 999999999999
         training_args.load_best_model_at_end = True
-        training_args.evaluation_strategy = 'steps'
         if training_args.metric_for_best_model is None:
             training_args.metric_for_best_model = 'eval_loss'
     # Initialize our Trainer

@@ -3,6 +3,8 @@ import logging
 from collections.abc import Sized
 from typing import Dict
 import numpy as np
+from itertools import zip_longest
+import inspect
 
 import torch
 from torch.utils.data.dataloader import DataLoader
@@ -12,9 +14,14 @@ from dataclasses import dataclass
 from transformers import PreTrainedTokenizerBase
 from transformers.data.data_collator import DataCollatorForLanguageModeling
 
-from datasets import Dataset
+import datasets as hf_datasets
+from datasets.config import HF_DATASETS_CACHE
+from datasets import Dataset, DatasetDict
+from datasets.fingerprint import Hasher
 
 from mining_extractor import get_color, reset_color
+from cao_align.multilingual_alignment import keep_1to1
+from cao_align import text_data, cao_data
 
 logger = logging.getLogger(__name__)
 
@@ -767,3 +774,155 @@ def save_embeddings(embeddings, output, word_order=None):
                 ),
                 file=fout,
             )
+
+
+def parse_alignments(align_str):
+    align_lst = np.array([
+        list(map(int, pair.split('-')))
+        for pair in align_str.split()
+    ])
+    align_lst = keep_1to1(align_lst)
+
+    return align_lst
+
+
+def cache_dataset(dataset, *args):
+    fingerprint = Hasher.hash(args)
+    path = os.path.join(
+        HF_DATASETS_CACHE,
+        'custom_data_cache',
+        f'{fingerprint}.cache'
+    )
+    logger.info(f'Caching file to: {path}')
+    dataset.save_to_disk(path)
+    return hf_datasets.load_from_disk(path)
+
+
+def load_cached_dataset(*args):
+    fingerprint = Hasher.hash(args)
+    path = os.path.join(
+        HF_DATASETS_CACHE,
+        'custom_data_cache',
+        f'{fingerprint}.cache'
+    )
+    if not os.path.exists(path):
+        return None
+
+    logger.info(f'Loading from cache: {path}')
+    logger.info('WARNING: Data change not checked!')
+    return hf_datasets.load_from_disk(path)
+
+
+def load_parallel_data_from_file(sentences_file, alignments_file, src_lang,
+                                 trg_lang, split, load_from_cache_file=True):
+    # TODO redundant with cao_data.py
+    if load_from_cache_file:
+        res = load_cached_dataset(
+            sentences_file,
+            alignments_file,
+            src_lang,
+            trg_lang,
+            split,
+            inspect.getsource(load_parallel_data_from_file)
+        )
+        if res is not None:
+            return res
+
+    logger.info(f'Loading files: {sentences_file} -- {alignments_file}')
+    res = dict()
+    with open(sentences_file) as sin, open(alignments_file) as ain:
+        num = 0
+        src_lst = list()
+        trg_lst = list()
+        align_lst = list()
+        for split_name, split_num in split:
+            for sents, aligns in zip_longest(sin, ain):
+                assert sents is not None and aligns is not None
+
+                sents = sents.split(' ||| ')
+                if len(sents[0].split()) > cao_data.MAX_SENTENCE_LENGTH or len(sents[1].split()) > cao_data.MAX_SENTENCE_LENGTH:
+                    continue
+
+                src_lst.append(sents[0].strip())
+                trg_lst.append(sents[1].strip())
+                align_lst.append(parse_alignments(aligns))
+
+                num += 1
+                if num == split_num:
+                    res[split_name] = Dataset.from_dict({
+                        'source': src_lst,
+                        'target': trg_lst,
+                        'alignment': align_lst,
+                        'source_language': [src_lang] * len(src_lst),
+                        'target_language': [trg_lang] * len(trg_lst),
+                    })
+                    num = 0
+                    src_lst = list()
+                    trg_lst = list()
+                    align_lst = list()
+                    break
+
+            if len(src_lst) > 0:
+                res[split_name] = Dataset.from_dict({
+                    'source': src_lst,
+                    'target': trg_lst,
+                    'alignment': align_lst,
+                    'source_language': [src_lang] * len(src_lst),
+                    'target_language': [trg_lang] * len(trg_lst),
+                })
+
+    res = DatasetDict(res)
+
+    if load_from_cache_file:
+        res = cache_dataset(
+            res,
+            sentences_file,
+            alignments_file,
+            src_lang,
+            trg_lang,
+            split,
+            inspect.getsource(load_parallel_data_from_file)
+        )
+
+    return res
+
+
+def load_text_data_from_file(file, lang, load_from_cache_file=True):
+    # TODO redundant with text_data.py
+    if load_from_cache_file:
+        res = load_cached_dataset(
+            file,
+            lang,
+            inspect.getsource(load_text_data_from_file),
+        )
+        if res is not None:
+            return res
+
+    logger.info(f'Loading file: {file}')
+    res = dict()
+    with open(file) as fin:
+        lst = list()
+        for sent in fin:
+            sent = sent.strip()
+
+            length = len(sent.split())
+            if length > text_data.MAX_SENTENCE_LENGTH or length < text_data.MIN_SENTENCE_LENGTH:
+                continue
+
+            lst.append(sent)
+
+    res['train'] = Dataset.from_dict({
+        'text': lst,
+        'language': [lang] * len(lst),
+    })
+    res = DatasetDict(res)
+
+    if load_from_cache_file:
+        res = cache_dataset(
+            res,
+            file,
+            lang,
+            inspect.getsource(load_text_data_from_file),
+        )
+
+    return res

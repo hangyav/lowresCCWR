@@ -47,7 +47,7 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-from cao_align.cao_data import MAX_SENTENCE_LENGTH
+from cao_align.cao_data import MAX_SENTENCE_LENGTH, LANGUAGE_SENTENCES_NUMBERS
 from cao_align.utils import (
     DataCollatorForCaoAlignment,
     SizedMultiDataset,
@@ -55,6 +55,8 @@ from cao_align.utils import (
     DataCollatorForCaoMLMAlignment,
     tokenize_function_for_parallel,
     tokenize_function_for_unlabeled,
+    load_parallel_data_from_file,
+    load_text_data_from_file,
 )
 from cao_align.cao_model import (
     BertForCaoAlign,
@@ -149,6 +151,18 @@ class DataTrainingArguments:
         default='./cao_align/cao_data.py',
         metadata={"help": "The name of the dataset to use (via the datasets library)."}
     )
+    dataset_dir: Optional[str] = field(
+        default=None,
+        metadata={"help": "Folder containing dataset files. Ignores dataset_name parameter"}
+    )
+    dataset_sentences_pattern_name: Optional[str] = field(
+        default='{}.tokens',
+        metadata={"help": "Used if dataset_name. Parallel sentences"}
+    )
+    dataset_alignments_pattern_name: Optional[str] = field(
+        default='{}.alignments',
+        metadata={"help": "Used if dataset_name. Word alignments"}
+    )
     dataset_config_name: Optional[str] = field(
         default="es-en,bg-en,fr-en,de-en,el-en,ne-en",
         metadata={"help": "The configuration name of the dataset to use (via the datasets library)."}
@@ -157,6 +171,14 @@ class DataTrainingArguments:
     mining_dataset_name: Optional[str] = field(
         default='./cao_align/text_data.py',
         metadata={"help": "The name of the dataset to use (via the datasets library)."}
+    )
+    mining_dataset_dir: Optional[str] = field(
+        default=None,
+        metadata={"help": "Folder containing mining files. Ignores mining_dataset_name parameter"}
+    )
+    mining_dataset_pattern_name: Optional[str] = field(
+        default='{}wiki.tok.sample',
+        metadata={"help": "Used if mining_dataset_name."}
     )
     mining_language_pairs: Optional[str] = field(
         default="ne-en,en-ne",
@@ -550,30 +572,73 @@ def get_model_components(model_args, data_args, training_args):
 def get_parallel_datasets(data_args, model_args, training_args, tokenizer, model):
     # Downloading and loading a dataset
     config_names = data_args.dataset_config_name
-    load_train = 'train'
-    load_validation = 'validation'
-    load_test = 'test'
-    if data_args.max_train_samples is not None:
-        load_train = f'train[:{data_args.max_train_samples}]'
-    if data_args.max_eval_samples is not None:
-        load_train = f'validation[:{data_args.max_eval_samples}]'
+    if data_args.dataset_dir is None:
+        load_train = 'train'
+        load_validation = 'validation'
+        load_test = 'test'
+        if data_args.max_train_samples is not None:
+            load_train = f'train[:{data_args.max_train_samples}]'
+        if data_args.max_eval_samples is not None:
+            load_train = f'validation[:{data_args.max_eval_samples}]'
 
-    raw_datasets = {
-        config_name: load_dataset(
-            data_args.dataset_name,
-            config_name,
-            cache_dir=model_args.cache_dir,
-            split={
-                'train': load_train,
-                'validation': load_validation,
-                'test': load_test,
-            },
-            download_mode=('force_redownload'
-                           if data_args.force_mining_dataset_download and ci == 0
-                           else 'reuse_dataset_if_exists'),
-        )
-        for ci, config_name in enumerate(config_names)
-    }
+        raw_datasets = {
+            config_name: load_dataset(
+                data_args.dataset_name,
+                config_name,
+                cache_dir=model_args.cache_dir,
+                split={
+                    'train': load_train,
+                    'validation': load_validation,
+                    'test': load_test,
+                },
+                download_mode=('force_redownload'
+                               if data_args.force_mining_dataset_download and ci == 0
+                               else 'reuse_dataset_if_exists'),
+            )
+            for ci, config_name in enumerate(config_names)
+        }
+    else:
+        raw_datasets = {
+            config_name: load_parallel_data_from_file(
+                os.path.join(
+                    data_args.dataset_dir,
+                    data_args.dataset_sentences_pattern_name.format(config_name)
+                ),
+                os.path.join(
+                    data_args.dataset_dir,
+                    data_args.dataset_alignments_pattern_name.format(config_name),
+                ),
+                config_name.split('-')[0],
+                config_name.split('-')[1],
+                split=[
+                    ('test', 1024),
+                    ('validation', 1024),
+                    ('train', -1),
+                ] if config_name not in LANGUAGE_SENTENCES_NUMBERS else [
+                    ('test', LANGUAGE_SENTENCES_NUMBERS[config_name][0]),
+                    ('validation', LANGUAGE_SENTENCES_NUMBERS[config_name][1]),
+                    ('train', LANGUAGE_SENTENCES_NUMBERS[config_name][2]),
+                ],
+                load_from_cache_file=not data_args.overwrite_cache,
+            )
+            for ci, config_name in enumerate(config_names)
+        }
+        if data_args.max_train_samples is not None:
+            raw_datasets = {
+                k: datasets.DatasetDict({
+                    kk: vv.select(range(data_args.max_train_samples)) if kk == 'train' else vv
+                    for kk, vv in v.items()
+                })
+                for k, v in raw_datasets.items()
+            }
+        if data_args.max_eval_samples is not None:
+            raw_datasets = {
+                k: datasets.DatasetDict({
+                    kk: vv.select(range(data_args.max_eval_samples)) if kk == 'validation' else vv
+                    for kk, vv in v.items()
+                })
+                for k, v in raw_datasets.items()
+            }
 
     # Preprocessing the datasets.
     # First we tokenize all the texts.
@@ -654,24 +719,45 @@ def get_parallel_datasets(data_args, model_args, training_args, tokenizer, model
 def get_mining_datasets(training_args, data_args, model_args, tokenizer, model,
                         max_seq_length):
     config_names = {lang for item in data_args.mining_language_pairs for lang in item}
-    load_train = 'train'
-    if data_args.max_mining_samples is not None:
-        load_train = f'train[:{data_args.max_mining_samples}]'
+    if data_args.mining_dataset_dir is None:
+        load_train = 'train'
+        if data_args.max_mining_samples is not None:
+            load_train = f'train[:{data_args.max_mining_samples}]'
 
-    raw_datasets = {
-        config_name: load_dataset(
-            data_args.mining_dataset_name,
-            config_name,
-            cache_dir=model_args.cache_dir,
-            split={
-                'train': load_train,
-            },
-            download_mode=('force_redownload'
-                           if data_args.force_mining_dataset_download and ci == 0
-                           else 'reuse_dataset_if_exists'),
-        )
-        for ci, config_name in enumerate(config_names)
-    }
+        raw_datasets = {
+            config_name: load_dataset(
+                data_args.mining_dataset_name,
+                config_name,
+                cache_dir=model_args.cache_dir,
+                split={
+                    'train': load_train,
+                },
+                download_mode=('force_redownload'
+                               if data_args.force_mining_dataset_download and ci == 0
+                               else 'reuse_dataset_if_exists'),
+            )
+            for ci, config_name in enumerate(config_names)
+        }
+    else:
+        raw_datasets = {
+            config_name: load_text_data_from_file(
+                os.path.join(
+                    data_args.mining_dataset_dir,
+                    data_args.mining_dataset_pattern_name.format(config_name)
+                ),
+                config_name,
+                load_from_cache_file=not data_args.overwrite_cache,
+            )
+            for ci, config_name in enumerate(config_names)
+        }
+        if data_args.max_mining_samples is not None:
+            raw_datasets = {
+                k: datasets.DatasetDict({
+                    kk: vv.select(range(data_args.max_mining_samples))
+                    for kk, vv in v.items()
+                })
+                for k, v in raw_datasets.items()
+            }
 
     dataset = MultiDataset({v: k["train"] for v, k in raw_datasets.items()})
 

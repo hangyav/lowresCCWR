@@ -1,13 +1,15 @@
+import os
 import pytest
 import torch
 from functools import partial
 import copy
+import tempfile
 
 import run_cao as rc
 from cao_align import cao_model as cm
 from cao_align import utils as cu
 from transformers import AutoTokenizer, BertModel
-from datasets import Dataset
+from datasets import Dataset, DatasetDict
 
 
 @pytest.fixture
@@ -1219,3 +1221,191 @@ def test_freezed_linear(train,
         clone_model._get_language_layer('de').named_parameters(),
     ):
         assert not torch.all(torch.eq(param[1], clone_param[1])), f'{param[0]} - {clone_param[0]}'
+
+
+@pytest.mark.parametrize('raw,parsed', [
+    (
+        {
+            'text': '\n'.join([
+                ' ||| '.join([
+                    'TRAIN I like beer .',
+                    'TRAIN I like beer .',
+                ]),
+                ' ||| '.join([
+                    'TRAIN I like beer .',
+                    'TRAIN I like beer .',
+                ]),
+                ' ||| '.join([
+                    'DEV I like beer .',
+                    'DEV I like beer .',
+                ]),
+                ' ||| '.join([
+                    'TEST I like beer .',
+                    'TEST I like beer .',
+                ]),
+                ' ||| '.join([
+                    'TEST I like beer .',
+                    'TEST I like beer .',
+                ]),
+            ]),
+            'align': '\n'.join([
+                '0-0 1-1 2-2 3-3',
+                '0-0 1-1 2-2 3-3',
+                '0-0 1-1 2-2 3-3',
+                '0-0 1-1 2-2 3-3',
+                '0-0 1-1 2-2 3-3',
+            ]),
+            'src_lang': 'en',
+            'trg_lang': 'en',
+        },
+        DatasetDict({
+            'train': Dataset.from_dict({
+                'source': [
+                    'TRAIN I like beer .',
+                    'TRAIN I like beer .',
+                ],
+                'target': [
+                    'TRAIN I like beer .',
+                    'TRAIN I like beer .',
+                ],
+                'alignment': [
+                    [(0, 0), (1, 1), (2, 2), (3, 3)],
+                    [(0, 0), (1, 1), (2, 2), (3, 3)],
+                ],
+                'source_language': [
+                    'en',
+                    'en',
+                ],
+                'target_language': [
+                    'en',
+                    'en',
+                ]
+
+            }),
+            'dev': Dataset.from_dict({
+                'source': [
+                    'DEV I like beer .',
+                ],
+                'target': [
+                    'DEV I like beer .',
+                ],
+                'alignment': [
+                    [(0, 0), (1, 1), (2, 2), (3, 3)],
+                ],
+                'source_language': [
+                    'en',
+                ],
+                'target_language': [
+                    'en',
+                ]
+
+            }),
+            'test': Dataset.from_dict({
+                'source': [
+                    'TEST I like beer .',
+                    'TEST I like beer .',
+                ],
+                'target': [
+                    'TEST I like beer .',
+                    'TEST I like beer .',
+                ],
+                'alignment': [
+                    [(0, 0), (1, 1), (2, 2), (3, 3)],
+                    [(0, 0), (1, 1), (2, 2), (3, 3)],
+                ],
+                'source_language': [
+                    'en',
+                    'en',
+                ],
+                'target_language': [
+                    'en',
+                    'en',
+                ]
+
+            }),
+        }),
+    ),
+])
+def test_load_parallel_from_file(raw, parsed):
+    try:
+        tmps = tempfile.mkstemp(text=True)[1]
+        with open(tmps, 'w') as fout:
+            fout.write(raw['text'])
+
+        tmpa = tempfile.mkstemp(text=True)[1]
+        with open(tmpa, 'w') as fout:
+            fout.write(raw['align'])
+
+        parsed_raw = cu.load_parallel_data_from_file(
+            tmps,
+            tmpa,
+            raw['src_lang'],
+            raw['trg_lang'],
+            [('train', 2), ('dev', 1), ('test', -1)],
+            load_from_cache_file=False,
+        )
+
+        for split in ['train', 'dev', 'test']:
+            assert parsed_raw[split]['source'] == parsed[split]['source']
+            assert parsed_raw[split]['target'] == parsed[split]['target']
+            assert parsed_raw[split]['alignment'] == parsed[split]['alignment']
+            assert parsed_raw[split]['source_language'] == parsed[split]['source_language']
+            assert parsed_raw[split]['target_language'] == parsed[split]['target_language']
+    finally:
+        if os.path.exists(tmps):
+            os.remove(tmps)
+        if os.path.exists(tmpa):
+            os.remove(tmpa)
+
+
+@pytest.mark.parametrize('raw,parsed', [
+    (
+        {
+            'text': '\n'.join([
+                'This is a dummy sentence',
+                'This is a dummy sentence',
+                'This is a dummy sentence',
+                'This is a dummy sentence',
+                'Der ist ein Apfel',  # too short
+                'This is a dummy sentence',
+                'Apfel ist der beste',
+            ]),
+            'lang': 'en',
+        },
+        DatasetDict({
+            'train': Dataset.from_dict({
+                'text': [
+                    'This is a dummy sentence',
+                    'This is a dummy sentence',
+                    'This is a dummy sentence',
+                    'This is a dummy sentence',
+                    'This is a dummy sentence',
+                ],
+                'language': [
+                    'en',
+                    'en',
+                    'en',
+                    'en',
+                    'en',
+                ],
+            }),
+        }),
+    ),
+])
+def test_load_text_from_file(raw, parsed):
+    try:
+        tmpf = tempfile.mkstemp(text=True)[1]
+        with open(tmpf, 'w') as fout:
+            fout.write(raw['text'])
+
+        parsed_raw = cu.load_text_data_from_file(
+            tmpf,
+            raw['lang'],
+            load_from_cache_file=False,
+        )
+
+        assert parsed_raw['train']['text'] == parsed['train']['text']
+        assert parsed_raw['train']['language'] == parsed['train']['language']
+    finally:
+        if os.path.exists(tmpf):
+            os.remove(tmpf)
