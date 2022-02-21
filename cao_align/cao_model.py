@@ -52,6 +52,8 @@ logger = logging.getLogger(__name__)
 
 
 class BertForCaoAlign(BertPreTrainedModel):
+    # TODO Refactoring: Create heads for full, linear, pretrained align and MLM.
+    # Then create model that contain an align head and/or MLM head, classification head
 
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
     _keys_to_ignore_on_load_missing = [r"position_ids", r"predictions.decoder.bias"]
@@ -332,7 +334,7 @@ class BertForCaoAlign(BertPreTrainedModel):
             return list(sorted(res, key=lambda x: (x[0], x[2], x[1], x[3])))
 
 
-class BertForCaoAlignMLM(BertForCaoAlign):
+class BertForCaoAlignMLM(BertPreTrainedModel):
 
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
     _keys_to_ignore_on_load_missing = [
@@ -340,8 +342,9 @@ class BertForCaoAlignMLM(BertForCaoAlign):
         r"predictions.decoder.bias",
     ]
 
-    def __init__(self, config, src_mlm_weight, trg_mlm_weight):
+    def __init__(self, config, bert, src_mlm_weight, trg_mlm_weight):
         super().__init__(config)
+        self.bert = bert
         self.cls = BertOnlyMLMHead(config)
         self.src_mlm_weight = src_mlm_weight
         self.trg_mlm_weight = trg_mlm_weight
@@ -374,7 +377,7 @@ class BertForCaoAlignMLM(BertForCaoAlign):
         trg_mlm_labels=None,
         trg_mlm_special_word_masks=None,
     ):
-        alignment_output = super().forward(
+        alignment_output = self.bert(
             src_input_ids,
             src_word_ids_lst,
             src_special_word_masks,
@@ -446,7 +449,7 @@ class BertForCaoAlignMLM(BertForCaoAlign):
         return_dict = return_dict if return_dict is not None \
                 else self.config.use_return_dict
 
-        outputs = self.bert(
+        outputs = self.bert.bert(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
@@ -479,9 +482,15 @@ class BertForCaoAlignMLM(BertForCaoAlign):
         return MaskedLMOutput(
             loss=masked_lm_loss,
             logits=prediction_scores,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
+            #  hidden_states=outputs.hidden_states,
+            #  attentions=outputs.attentions,
         )
+
+    def mine_word_pairs(self, *args, **kwargs):
+        return self.bert.mine_word_pairs(*args, **kwargs)
+
+    def mine_intersection_word_pairs(self, *args, **kwargs):
+        return self.bert.mine_intersection_word_pairs(*args, **kwargs)
 
 
 class LinearEye(nn.Module):
@@ -506,7 +515,7 @@ class LinearEye(nn.Module):
 
 class BertForLinerLayearAlign(BertForCaoAlign):
 
-    def __init__(self, config, languages,):
+    def __init__(self, config, languages, freeze_bert_core=True):
         super().__init__(config)
         # this is needed because it has to be added to the optimizer in the
         # beginning
@@ -515,8 +524,9 @@ class BertForLinerLayearAlign(BertForCaoAlign):
             for lang in languages
         })
 
-        for param in self.bert.parameters():
-            param.requires_grad = False
+        if freeze_bert_core:
+            for param in self.bert.parameters():
+                param.requires_grad = False
 
     def forward(
         self,
@@ -651,6 +661,7 @@ class BertForTokenClassification(BertPreTrainedModel):
     def __init__(self, config, bert=None, freeze_bert_core=True):
         super().__init__(config)
         self.num_labels = config.num_labels
+        self.freeze_bert_core = freeze_bert_core
 
         self.bert = bert
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
@@ -678,7 +689,7 @@ class BertForTokenClassification(BertPreTrainedModel):
 
     def set_bert(self, new_bert):
         self.bert = new_bert
-        if self.bert is not None:
+        if self.freeze_bert_core and self.bert is not None:
             for param in self.bert.parameters():
                 param.requires_grad = False
 

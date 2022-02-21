@@ -50,8 +50,12 @@ from cao_align.cao_model import (
     BertForCaoAlign,
     BertForLinerLayearAlign,
     BertForPretrainedLinearLayerAlign,
+    BertForCaoAlignMLM,
 )
-from cao_align.utils import tokenizer_function_for_ner, DataCollatorForNER
+from cao_align.utils import (
+    tokenizer_function_for_ner,
+    DataCollatorForNER,
+)
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -462,8 +466,45 @@ def get_model_components(model_args, data_args, training_args, num_labels,
                 languages=languages,
             )
             params['language_layers'] = list(languages)
-        elif arch == BertForPretrainedLinearLayerAlign.__name__:
+        elif arch == BertForCaoAlignMLM.__name__:
+            sub_arch = config.subarchitecture
+            if sub_arch == BertForCaoAlign.__name__:
+                aligned_model = BertForCaoAlign(config)
+            else:
+                languages = set(model_args.languages) | {data_args.dataset_config_name}
+                params['language_layers'] = list(languages)
+                if sub_arch == BertForLinerLayearAlign.__name__:
+                    aligned_model = BertForLinerLayearAlign(
+                        config,
+                        languages,
+                    )
+                elif sub_arch == BertForPretrainedLinearLayerAlign.__name__:
+                    aligned_model = BertForPretrainedLinearLayerAlign(
+                        config,
+                        languages,
+                        {},
+                    )
+                else:
+                    raise f'Architecture not supported: {sub_arch}'
+
+                model = BertForCaoAlignMLM.from_pretrained(
+                    model_args.model_name_or_path,
+                    from_tf=bool(".ckpt" in model_args.model_name_or_path),
+                    config=config,
+                    cache_dir=model_args.cache_dir,
+                    revision=model_args.model_revision,
+                    use_auth_token=True if model_args.use_auth_token else None,
+                    src_mlm_weight=0.00001,
+                    trg_mlm_weight=0.00001,
+                    bert=aligned_model,
+                )
+                aligned_model = model.bert
+        elif arch == BertForCaoAlign.__name__ and model_args.pretrained_alignments is not None:
             languages = set(model_args.languages) | {data_args.dataset_config_name}
+            lang_map = {
+                lang: np.load(path)
+                for lang, path in model_args.pretrained_alignments.items()
+            }
             aligned_model = BertForPretrainedLinearLayerAlign.from_pretrained(
                 model_args.model_name_or_path,
                 from_tf=bool(".ckpt" in model_args.model_name_or_path),
@@ -472,7 +513,7 @@ def get_model_components(model_args, data_args, training_args, num_labels,
                 revision=model_args.model_revision,
                 use_auth_token=True if model_args.use_auth_token else None,
                 languages=languages,
-                language_mappings=model_args.pretrained_alignments,
+                language_mappings=lang_map,
             )
             params['language_layers'] = list(languages)
         else:

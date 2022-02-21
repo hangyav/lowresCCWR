@@ -8,7 +8,7 @@ import tempfile
 import run_cao as rc
 from cao_align import cao_model as cm
 from cao_align import utils as cu
-from transformers import AutoTokenizer, BertModel
+from transformers import AutoTokenizer, BertModel, AutoConfig
 from datasets import Dataset, DatasetDict
 
 
@@ -41,11 +41,29 @@ def linear_bert():
 
 @pytest.fixture
 def align_mlm_bert():
-    return cm.BertForCaoAlignMLM.from_pretrained(
-        'bert-base-multilingual-cased',
+    model = cm.BertForCaoAlignMLM(
+        AutoConfig.from_pretrained('bert-base-multilingual-cased'),
+        bert=None,
         src_mlm_weight=0.01,
         trg_mlm_weight=0.01,
     )
+    model.bert = cm.BertForCaoAlign.from_pretrained('bert-base-multilingual-cased')
+    return model
+
+
+@pytest.fixture
+def linear_mlm_bert():
+    model = cm.BertForCaoAlignMLM(
+        AutoConfig.from_pretrained('bert-base-multilingual-cased'),
+        bert=None,
+        src_mlm_weight=0.01,
+        trg_mlm_weight=0.01,
+    )
+    model.bert = cm.BertForLinerLayearAlign.from_pretrained(
+        'bert-base-multilingual-cased',
+        languages={'en', 'de'}
+    )
+    return model
 
 
 @pytest.mark.parametrize('examples,expected', [
@@ -469,7 +487,7 @@ def test_trainer_mlm(train, eval,
                      tokenizer_bert_multilingual_cased):
     collator = cu.DataCollatorForCaoMLMAlignment(
         tokenizer=tokenizer_bert_multilingual_cased,
-        max_length=align_mlm_bert.bert.embeddings.position_embeddings.num_embeddings,
+        max_length=align_mlm_bert.bert.bert.embeddings.position_embeddings.num_embeddings,
         include_clssep=True,
         mlm_probability=0.9,
         pad_to_multiple_of_8=False,
@@ -517,7 +535,7 @@ def test_trainer_mlm(train, eval,
     trainer.evaluate()
 
 
-@pytest.mark.parametrize('examples,expected,equals', [
+mlm_pipeline_data = [
     (
         {
             'source': [
@@ -611,12 +629,14 @@ def test_trainer_mlm(train, eval,
             'equals': False,
         },
     ),
-])
-def test_mlm_pipeline(examples, expected, equals,
-                      bert_base, align_mlm_bert, tokenizer_bert_multilingual_cased):
+]
+
+
+def _mlm_pipeline(examples, expected, equals,
+                  bert_base, model, tokenizer_bert_multilingual_cased):
     collator = cu.DataCollatorForCaoMLMAlignment(
         tokenizer=tokenizer_bert_multilingual_cased,
-        max_length=align_mlm_bert.bert.embeddings.position_embeddings.num_embeddings,
+        max_length=model.bert.bert.embeddings.position_embeddings.num_embeddings,
         include_clssep=True,
         mlm_probability=1.0,
         pad_to_multiple_of_8=False,
@@ -637,7 +657,7 @@ def test_mlm_pipeline(examples, expected, equals,
     assert (batch['trg_input_ids'] != batch['trg_mlm_input_ids']).type(
         torch.IntTensor).sum().item() > 0
 
-    output = align_mlm_bert(return_dict=True, bert_base=bert_base, **batch)
+    output = model(return_dict=True, bert_base=bert_base, **batch)
 
     if equals['alignment_equals']:
         assert output['alignment_loss'].item() == expected['alignment_loss']
@@ -661,6 +681,21 @@ def test_mlm_pipeline(examples, expected, equals,
 
     assert output.src_mlm_output.loss.item() > 0.0
     assert output.trg_mlm_output.loss.item() > 0.0
+
+
+@pytest.mark.parametrize('examples,expected,equals', mlm_pipeline_data)
+def test_mlm_pipeline(examples, expected, equals,
+                      bert_base, align_mlm_bert, tokenizer_bert_multilingual_cased):
+    _mlm_pipeline(examples, expected, equals, bert_base, align_mlm_bert,
+                  tokenizer_bert_multilingual_cased)
+
+
+@pytest.mark.parametrize('examples,expected,equals', mlm_pipeline_data)
+def test_linear_mlm_pipeline(examples, expected, equals,
+                             bert_base, linear_mlm_bert,
+                             tokenizer_bert_multilingual_cased):
+    _mlm_pipeline(examples, expected, equals, bert_base, linear_mlm_bert,
+                  tokenizer_bert_multilingual_cased)
 
 
 @pytest.mark.parametrize('examples,expected', [

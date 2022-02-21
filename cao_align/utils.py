@@ -361,9 +361,15 @@ class MiningDataLoader():
         self.max_seq_length = max_seq_length
         self.use_data_cache = use_data_cache
 
+        if type(model).__name__ == 'BertForCaoAlignMLM':
+            # TODO not nice, refactor
+            max_len = model.bert.bert.embeddings.position_embeddings.num_embeddings
+        else:
+            max_len = model.bert.embeddings.position_embeddings.num_embeddings
+
         self._unlabeled_collator = DataCollatorForUnlabeledData(
             tokenizer=tokenizer,
-            max_length=model.bert.embeddings.position_embeddings.num_embeddings,
+            max_length=max_len,
             include_clssep=False,
         )
 

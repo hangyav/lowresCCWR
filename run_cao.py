@@ -181,7 +181,7 @@ class DataTrainingArguments:
         metadata={"help": "Used if mining_dataset_name."}
     )
     mining_language_pairs: Optional[str] = field(
-        default="ne-en,en-ne",
+        default="",
         metadata={"help": "The configuration name of the unsupervised dataset"
                   "to use (via the datasets library). These sets are used as"
                   "the source languages for mining."}
@@ -264,6 +264,7 @@ class DataTrainingArguments:
         self.mining_language_pairs = [
             item.split('-')
             for item in self.mining_language_pairs.split(',')
+            if len(item) > 0
         ]
 
         if self.max_train_samples == -1:
@@ -288,6 +289,10 @@ class MyTrainingArguments(TrainingArguments):
         metadata={
             "help": "Options: full, linear"
         },
+    )
+    freeze_bert_core: bool = field(
+        default=True,
+        metadata={"help": "In case of models with additional layers on top of bert"},
     )
     mining_batch_size: Optional[int] = field(
         default=None,
@@ -405,7 +410,6 @@ def setup():
 
 
 def get_model_components(model_args, data_args, training_args):
-    assert not data_args.do_mlm or training_args.align_method == 'full', 'Currently not supported!'
     # Detecting last checkpoint.
     last_checkpoint = None
     if os.path.isdir(training_args.output_dir) and training_args.do_train and not training_args.overwrite_output_dir:
@@ -459,7 +463,65 @@ def get_model_components(model_args, data_args, training_args):
         )
 
     if model_args.model_name_or_path:
-        if not data_args.do_mlm:
+        arch = config.architectures[0]
+
+        if arch == BertForCaoAlignMLM.__name__:
+            sub_arch = config.subarchitecture
+
+            if sub_arch == BertForCaoAlign.__name__:
+                aligned_model = BertForCaoAlign(config)
+            else:
+                langs = {
+                        lang
+                        for pair in data_args.dataset_config_name
+                        for lang in pair.split('-')
+                } | {
+                    lang
+                    for pair in data_args.mining_language_pairs
+                    for lang in pair
+                }
+                if sub_arch == BertForLinerLayearAlign.__name__:
+                    aligned_model = BertForLinerLayearAlign(
+                        config,
+                        langs,
+                    )
+                elif sub_arch == BertForPretrainedLinearLayerAlign.__name__:
+                    aligned_model = BertForPretrainedLinearLayerAlign(
+                        config,
+                        langs,
+                        {},
+                    )
+                else:
+                    raise f'Architecture not supported: {sub_arch}'
+
+            model = BertForCaoAlignMLM.from_pretrained(
+                model_args.model_name_or_path,
+                from_tf=bool(".ckpt" in model_args.model_name_or_path),
+                config=config,
+                cache_dir=model_args.cache_dir,
+                revision=model_args.model_revision,
+                use_auth_token=True if model_args.use_auth_token else None,
+                src_mlm_weight=data_args.src_mlm_weight,
+                trg_mlm_weight=data_args.trg_mlm_weight,
+                bert=aligned_model,
+            )
+
+            if not data_args.do_mlm:
+                model = model.bert
+
+            model_base = BertForCaoAlignMLM.from_pretrained(
+                model_args.model_name_or_path,
+                from_tf=bool(".ckpt" in model_args.model_name_or_path),
+                config=config,
+                cache_dir=model_args.cache_dir,
+                revision=model_args.model_revision,
+                use_auth_token=True if model_args.use_auth_token else None,
+                src_mlm_weight=data_args.src_mlm_weight,
+                trg_mlm_weight=data_args.trg_mlm_weight,
+                bert=BertForCaoAlign(config),
+            )
+            model_base = model_base.bert.bert
+        else:
             if training_args.align_method == 'full':
                 model = BertForCaoAlign.from_pretrained(
                     model_args.model_name_or_path,
@@ -507,29 +569,100 @@ def get_model_components(model_args, data_args, training_args):
                     )
             else:
                 raise f'Align method not supported: {training_args.align_method}'
-        else:
-            if training_args.align_method == 'linear':
-                raise NotImplementedError('MLM with linear mapping is not implemented yet!')
 
-            model = BertForCaoAlignMLM.from_pretrained(
+            if data_args.do_mlm:
+                mlm_model = BertForCaoAlignMLM(
+                    config,
+                    src_mlm_weight=data_args.src_mlm_weight,
+                    trg_mlm_weight=data_args.trg_mlm_weight,
+                    bert=None,
+                )
+                mlm_model.bert = model
+                model = mlm_model
+                model.config.update({
+                    'subarchitecture': type(model.bert).__name__
+                })
+
+            model_base = BertModel.from_pretrained(
                 model_args.model_name_or_path,
                 from_tf=bool(".ckpt" in model_args.model_name_or_path),
                 config=config,
                 cache_dir=model_args.cache_dir,
                 revision=model_args.model_revision,
                 use_auth_token=True if model_args.use_auth_token else None,
-                src_mlm_weight=data_args.src_mlm_weight,
-                trg_mlm_weight=data_args.trg_mlm_weight,
             )
 
-        model_base = BertModel.from_pretrained(
-            model_args.model_name_or_path,
-            from_tf=bool(".ckpt" in model_args.model_name_or_path),
-            config=config,
-            cache_dir=model_args.cache_dir,
-            revision=model_args.model_revision,
-            use_auth_token=True if model_args.use_auth_token else None,
-        )
+        #  if not data_args.do_mlm:
+        #      if training_args.align_method == 'full':
+        #          model = BertForCaoAlign.from_pretrained(
+        #              model_args.model_name_or_path,
+        #              from_tf=bool(".ckpt" in model_args.model_name_or_path),
+        #              config=config,
+        #              cache_dir=model_args.cache_dir,
+        #              revision=model_args.model_revision,
+        #              use_auth_token=True if model_args.use_auth_token else None,
+        #          )
+        #      elif training_args.align_method == 'linear':
+        #          langs = {
+        #                  lang
+        #                  for pair in data_args.dataset_config_name
+        #                  for lang in pair.split('-')
+        #          } | {
+        #              lang
+        #              for pair in data_args.mining_language_pairs
+        #              for lang in pair
+        #          }
+        #          if training_args.pretrained_alignments is None:
+        #              model = BertForLinerLayearAlign.from_pretrained(
+        #                  model_args.model_name_or_path,
+        #                  from_tf=bool(".ckpt" in model_args.model_name_or_path),
+        #                  config=config,
+        #                  cache_dir=model_args.cache_dir,
+        #                  revision=model_args.model_revision,
+        #                  use_auth_token=True if model_args.use_auth_token else None,
+        #                  languages=langs,
+        #              )
+        #          else:
+        #              lang_map = {
+        #                  lang: np.load(path)
+        #                  for lang, path in training_args.pretrained_alignments.items()
+        #              }
+        #
+        #              model = BertForPretrainedLinearLayerAlign.from_pretrained(
+        #                  model_args.model_name_or_path,
+        #                  from_tf=bool(".ckpt" in model_args.model_name_or_path),
+        #                  config=config,
+        #                  cache_dir=model_args.cache_dir,
+        #                  revision=model_args.model_revision,
+        #                  use_auth_token=True if model_args.use_auth_token else None,
+        #                  languages=langs,
+        #                  language_mappings=lang_map,
+        #              )
+        #      else:
+        #          raise f'Align method not supported: {training_args.align_method}'
+        #  else:
+        #      if training_args.align_method == 'linear':
+        #          raise NotImplementedError('MLM with linear mapping is not implemented yet!')
+        #
+        #      model = BertForCaoAlignMLM.from_pretrained(
+        #          model_args.model_name_or_path,
+        #          from_tf=bool(".ckpt" in model_args.model_name_or_path),
+        #          config=config,
+        #          cache_dir=model_args.cache_dir,
+        #          revision=model_args.model_revision,
+        #          use_auth_token=True if model_args.use_auth_token else None,
+        #          src_mlm_weight=data_args.src_mlm_weight,
+        #          trg_mlm_weight=data_args.trg_mlm_weight,
+        #      )
+
+        #  model_base = BertModel.from_pretrained(
+        #      model_args.model_name_or_path,
+        #      from_tf=bool(".ckpt" in model_args.model_name_or_path),
+        #      config=config,
+        #      cache_dir=model_args.cache_dir,
+        #      revision=model_args.model_revision,
+        #      use_auth_token=True if model_args.use_auth_token else None,
+        #  )
 
     else:
         logger.info("Training new model from scratch")
@@ -570,6 +703,8 @@ def get_model_components(model_args, data_args, training_args):
 
 
 def get_parallel_datasets(data_args, model_args, training_args, tokenizer, model):
+    if type(model) == BertForCaoAlignMLM:
+        model = model.bert
     # Downloading and loading a dataset
     config_names = data_args.dataset_config_name
     if data_args.dataset_dir is None:
