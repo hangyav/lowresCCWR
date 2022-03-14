@@ -25,4 +25,11 @@
 - Maori: Moses Tokenizer
 - Sindhi: Moses Tokenizer
 - Amharic: https://github.com/uhh-lt/amharicprocessor
+- Gujrati: Tokenizer and Normalizer from indic-nlp 
+- Kannada: Tokenizer and Normalizer from indic-nlp 
+- Bengali: Tokenizer and Normalizer from indic-nlp 
+- Afrikaans: Moses Tokenizer
+- Macedonian: Moses Tokenizer
+- Basque: Moses Tokenizer
+- Bulgarian: Moses Tokenizer
 
