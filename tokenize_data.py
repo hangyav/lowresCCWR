@@ -51,6 +51,20 @@ def sinhala():
     output_file.close()
     return 0
 
+def common():
+    remove_nuktas=False
+    factory=IndicNormalizerFactory()
+    normalizer=factory.get_normalizer(args.language)
+    for line in input_file:
+        line = line.strip()
+        line=normalizer.normalize(line)
+        words = indic_tokenize.trivial_tokenize(line)
+        sentence = " ".join(words) + '\n'
+        output_file.write(sentence)
+    input_file.close()
+    output_file.close()
+    return 0
+
 
 
 
@@ -78,6 +92,8 @@ if __name__ == "__main__" :
         amharic()
     elif 'si' in args.input_file:
         sinhala()
+    else:
+        common()
     
     
     
