@@ -10,8 +10,10 @@
 - bengali-english data: english - bengali parallel corpus from https://github.com/csebuetnlp/banglanmt#datasets
 - kannada-english data: english - kannada parallel corpus from https://indicnlp.ai4bharat.org/samanantar/
 - gujrati-english data: english - gujrati parallel corpus from https://indicnlp.ai4bharat.org/samanantar/
-- 
-- 
+- bulgarian-english data: english - bulgarian parallel corpus from https://www.statmt.org/europarl/
+- afrikaans-english data: english - afrikaans OpenSubtitles and Bible corpus from https://opus.nlpl.eu/
+- macedonian-english data: english - macedonian OpenSubtitles corpus from https://opus.nlpl.eu/
+- basque-english data: english - basque OpenSubtitles corpus from https://opus.nlpl.eu/
 
 ## Tokenizers
 
