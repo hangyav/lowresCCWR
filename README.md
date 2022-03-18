@@ -14,6 +14,7 @@
 - afrikaans-english data: english - afrikaans OpenSubtitles and Bible corpus from https://opus.nlpl.eu/
 - macedonian-english data: english - macedonian OpenSubtitles corpus from https://opus.nlpl.eu/
 - basque-english data: english - basque OpenSubtitles corpus from https://opus.nlpl.eu/
+- nepali-english data: english - nepali Bible corpus from https://opus.nlpl.eu/
 
 ## Tokenizers
 
@@ -32,4 +33,5 @@
 - Macedonian: Moses Tokenizer
 - Basque: Moses Tokenizer
 - Bulgarian: Moses Tokenizer
+- Nepali: Tokenizer and Normalizer from indic-nlp
 
