@@ -257,9 +257,13 @@ class DataTrainingArguments:
         self.dataset_config_name = [
             item
             for item in self.dataset_config_name.split(',')
-            # TODO remove this when Hi parallel data is added
-            if 'hi' not in item
+            if item not in [
+                'fo-en',
+                'hsb-en',
+            ]
         ]
+        if len(self.dataset_config_name) == 0:
+            self.dataset_config_name = ['de-en']
 
         self.mining_language_pairs = [
             item.split('-')

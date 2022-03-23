@@ -28,7 +28,7 @@ from functools import partial
 
 import datasets
 import numpy as np
-from datasets import ClassLabel, load_dataset, load_metric
+from datasets import ClassLabel, load_dataset, load_metric, DatasetDict
 
 import transformers
 from transformers import (
@@ -135,7 +135,9 @@ class DataTrainingArguments:
         default='wikiann', metadata={"help": "The name of the dataset to use (via the datasets library)."}
     )
     dataset_config_name: Optional[str] = field(
-        default=None, metadata={"help": "The configuration name of the dataset to use (via the datasets library)."}
+        default=None, metadata={"help": "The configuration name of the dataset"
+                                " to use (via the datasets library). Can be"
+                                " comma separated for train,validation,test"}
     )
     train_file: Optional[str] = field(
         default=None, metadata={"help": "The input training data file (a csv or JSON file)."}
@@ -217,6 +219,9 @@ class DataTrainingArguments:
         if self.label_all_tokens:
             raise NotImplementedError('Lable all tokens is not supported!')
 
+        if self.dataset_config_name is not None:
+            self.dataset_config_name = self.dataset_config_name.split(',')
+
 
 @dataclass
 class MyTrainingArguments(TrainingArguments):
@@ -279,6 +284,11 @@ def setup():
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
+    # processing dataset_config_name
+    assert 0 < len(data_args.dataset_config_name) <= 3, 'Train[, Validation][, Test]'
+    while len(data_args.dataset_config_name) < 3:
+        data_args.dataset_config_name.append(data_args.dataset_config_name[-1])
+
     return model_args, data_args, training_args
 
 
@@ -298,10 +308,15 @@ def get_datasets(data_args, model_args, training_args):
     # download the dataset.
     if data_args.dataset_name is not None:
         # Downloading and loading a dataset from the hub.
-        raw_datasets = load_dataset(
-            data_args.dataset_name, data_args.dataset_config_name,
-            cache_dir=model_args.cache_dir
-        )
+        raw_datasets = DatasetDict({
+            split: load_dataset(
+                data_args.dataset_name,
+                config_name,
+                cache_dir=model_args.cache_dir,
+                split=split,
+            )
+            for split, config_name in zip(['train', 'validation', 'test'], data_args.dataset_config_name)
+        })
     else:
         data_files = {}
         if data_args.train_file is not None:
@@ -426,7 +441,7 @@ def get_model_components(model_args, data_args, training_args, num_labels,
         if sub_arch == BertForCaoAlign.__name__:
             aligned_model = BertForCaoAlign(config)
         else:
-            languages = set(config.language_layers) | {data_args.dataset_config_name}
+            languages = set(config.language_layers) | set(data_args.dataset_config_name)
             if sub_arch == BertForLinerLayearAlign.__name__:
                 aligned_model = BertForLinerLayearAlign(
                     config,
@@ -455,7 +470,7 @@ def get_model_components(model_args, data_args, training_args, num_labels,
         params = dict()
 
         if arch == BertForLinerLayearAlign.__name__:
-            languages = set(model_args.languages) | {data_args.dataset_config_name}
+            languages = set(model_args.languages) | set(data_args.dataset_config_name)
             aligned_model = BertForLinerLayearAlign.from_pretrained(
                 model_args.model_name_or_path,
                 from_tf=bool(".ckpt" in model_args.model_name_or_path),
@@ -471,7 +486,7 @@ def get_model_components(model_args, data_args, training_args, num_labels,
             if sub_arch == BertForCaoAlign.__name__:
                 aligned_model = BertForCaoAlign(config)
             else:
-                languages = set(model_args.languages) | {data_args.dataset_config_name}
+                languages = set(model_args.languages) | set(data_args.dataset_config_name)
                 params['language_layers'] = list(languages)
                 if sub_arch == BertForLinerLayearAlign.__name__:
                     aligned_model = BertForLinerLayearAlign(
@@ -500,7 +515,7 @@ def get_model_components(model_args, data_args, training_args, num_labels,
                 )
                 aligned_model = model.bert
         elif arch == BertForCaoAlign.__name__ and model_args.pretrained_alignments is not None:
-            languages = set(model_args.languages) | {data_args.dataset_config_name}
+            languages = set(model_args.languages) | set(data_args.dataset_config_name)
             lang_map = {
                 lang: np.load(path)
                 for lang, path in model_args.pretrained_alignments.items()
