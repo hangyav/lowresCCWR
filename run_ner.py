@@ -40,6 +40,7 @@ from transformers import (
     TrainingArguments,
     set_seed,
     EarlyStoppingCallback,
+    BertModel,
 )
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
@@ -514,7 +515,7 @@ def get_model_components(model_args, data_args, training_args, num_labels,
                     bert=aligned_model,
                 )
                 aligned_model = model.bert
-        elif arch == BertForCaoAlign.__name__ and model_args.pretrained_alignments is not None:
+        elif arch == BertModel.__name__ and model_args.pretrained_alignments is not None:
             languages = set(model_args.languages) | set(data_args.dataset_config_name)
             lang_map = {
                 lang: np.load(path)

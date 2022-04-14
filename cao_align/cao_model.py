@@ -630,6 +630,17 @@ class BertForLinerLayearAlign(BertForCaoAlign):
         return layer(features)
 
 
+class PretrainedMapping(nn.Module):
+
+    def __init__(self, mapping):
+        super().__init__()
+
+        self.weight = nn.Parameter(mapping)
+
+    def forward(self, input):
+        return input.matmul(self.weight)
+
+
 class BertForPretrainedLinearLayerAlign(BertForLinerLayearAlign):
 
     def __init__(self, config, languages, language_mappings):
@@ -638,20 +649,31 @@ class BertForPretrainedLinearLayerAlign(BertForLinerLayearAlign):
 
     def _create_language_layer(self, language):
         if language in self.language_mappings:
-            layer = LinearEye(
-                self.config.hidden_size,
-                bias=False,
-                add_random=False,
-            )
-            with torch.no_grad():
-                layer.weight.copy_(
-                    torch.tensor(
-                        self.language_mappings[language],
-                        dtype=torch.float32,
-                    )
+            #  layer = LinearEye(
+            #      self.config.hidden_size,
+            #      bias=False,
+            #      add_random=False,
+            #  )
+            #  with torch.no_grad():
+            #      layer.weight.copy_(
+            #          torch.tensor(
+            #              self.language_mappings[language],
+            #              dtype=torch.float32,
+            #          )
+            #      )
+            layer = PretrainedMapping(
+                torch.tensor(
+                    self.language_mappings[language],
+                    dtype=torch.float32,
                 )
+            )
         else:
-            layer = LinearEye(self.config.hidden_size, bias=False, add_random=False)
+            layer = PretrainedMapping(
+                torch.eye(
+                    self.config.hidden_size,
+                    dtype=torch.float32,
+                )
+            )
 
         return layer
 
