@@ -6,6 +6,9 @@ import numpy as np
 from itertools import zip_longest
 import inspect
 
+import faiss
+import faiss.contrib.torch_utils
+
 import torch
 from torch.utils.data.dataloader import DataLoader
 
@@ -336,9 +339,10 @@ class MiningDataLoader():
                  tokenized_trg_dataset, batch_size, model, tokenizer,
                  threshold, parallel_collator, k=1, mine_batch_size=None,
                  dataloader_num_workers=0, dataloader_pin_memory=True,
-                 sample_for_mining=None, threshold_max=100, log_dir=None,
-                 mining_method='intersection', num_dataset_iterations=1,
-                 max_seq_length=None, use_data_cache=True):
+                 src_sample_for_mining=None, trg_sample_for_mining=None,
+                 threshold_max=100, log_dir=None, mining_method='intersection',
+                 num_dataset_iterations=1, max_seq_length=None,
+                 use_data_cache=True, faiss_index_str=None):
         self.dataset = (src_dataset, trg_dataset)
         self.tokenized_src_dataset = tokenized_src_dataset
         self.tokenized_trg_dataset = tokenized_trg_dataset
@@ -351,7 +355,8 @@ class MiningDataLoader():
         self.mine_batch_size = mine_batch_size if mine_batch_size else batch_size
         self.dataloader_pin_memory = dataloader_pin_memory
         self.dataloader_num_workers = dataloader_num_workers
-        self.sample_for_mining = sample_for_mining
+        self.src_sample_for_mining = src_sample_for_mining
+        self.trg_sample_for_mining = trg_sample_for_mining
         self.threshold_max = threshold_max
         self.log_dir = log_dir
         self._num_minings = 0
@@ -360,6 +365,7 @@ class MiningDataLoader():
         self.mining_method = mining_method
         self.max_seq_length = max_seq_length
         self.use_data_cache = use_data_cache
+        self.faiss_index_str = faiss_index_str
 
         if type(model).__name__ == 'BertForCaoAlignMLM':
             # TODO not nice, refactor
@@ -422,14 +428,15 @@ class MiningDataLoader():
         tokenized_trg_dataset = self.tokenized_trg_dataset
         src_dataset = self.dataset[0]
         trg_dataset = self.dataset[1]
-        if self.sample_for_mining:
+        if self.src_sample_for_mining:
             tokenized_src_dataset, src_dataset = self.sample_dataset(
                 [tokenized_src_dataset, src_dataset],
-                self.sample_for_mining,
+                self.src_sample_for_mining,
             )
+        if self.trg_sample_for_mining:
             tokenized_trg_dataset, trg_dataset = self.sample_dataset(
                 [tokenized_trg_dataset, trg_dataset],
-                self.sample_for_mining,
+                self.trg_sample_for_mining,
             )
 
         with torch.no_grad():
@@ -442,6 +449,7 @@ class MiningDataLoader():
                 k=self.k,
                 batch_size=self.mine_batch_size,
                 threshold_max=self.threshold_max,
+                faiss_index_str=self.faiss_index_str,
             )
 
         if model_training:
@@ -588,36 +596,151 @@ def normalize_matrix(mat, dim=-1):
     return mat / norm
 
 
-def sentence_batch_cosine_similarity(sentence, batch):
-    """
-    Embeddings of a sentence: num_sent_words x emb_dim
-    Embeddings in a batch: num_batch_sentences x num_batch_words x emb_dim
+#  def sentence_batch_cosine_similarity(sentence, batch):
+#      """
+#      Embeddings of a sentence: num_sent_words x emb_dim
+#      Embeddings in a batch: num_batch_sentences x num_batch_words x emb_dim
+#
+#      output: num_batch_sentences x num_sent_words x num_batch_words
+#      """
+#      sentence = normalize_matrix(sentence)
+#      batch = normalize_matrix(batch)
+#
+#      res = sentence.matmul(batch.transpose(1, 2))
+#      # Zero vectors (PAD) give nan values, set them to 0.0
+#      res = res.nan_to_num()
+#      return res
 
-    output: num_batch_sentences x num_sent_words x num_batch_words
-    """
-    sentence = normalize_matrix(sentence)
-    batch = normalize_matrix(batch)
 
-    res = sentence.matmul(batch.transpose(1, 2))
+def cosine_mining(src_batch, trg_batch, k, threshold_min=0.0,
+                  threshold_max=100.0):
+    """
+    Embeddings in a src_batch: num_batch_sentences1 x num_batch_words1 x emb_dim
+    Embeddings in a trgbatch: num_batch_sentences2 x num_batch_words2 x emb_dim
+
+    output: [(src_sent_idx, src_word_idx, trg_sent_idx, trg_word_idx, sim)]
+    """
+    batch1 = normalize_matrix(src_batch)
+    batch2 = normalize_matrix(trg_batch)
+
+    similarities = batch1.unsqueeze(0).transpose(0, 1).matmul(batch2.transpose(1, 2))
     # Zero vectors (PAD) give nan values, set them to 0.0
-    res = res.nan_to_num()
+    similarities = similarities.nan_to_num()
+    similarities[similarities < threshold_min] = 0.0
+    similarities[similarities > threshold_max] = 0.0
+    similarities = similarities.detach().to('cpu')
+    # num_batch_sentences1 x num_batch_words1 x num_batch_sentences2
+    # x num_batch_words2
+    similarities = similarities.transpose(1, 2)
+
+    res = list()
+    # XXX maybe eliminate loops by torch.flatten(start_dim=)
+    for src_sent_idx, src_sent_sim in enumerate(similarities):
+        for src_word_idx, src_word_sim in enumerate(src_sent_sim):
+            # [num_trg_sents, num_trg_words]
+            shape = src_word_sim.shape
+            src_word_sim = src_word_sim.flatten()
+            sims, indices = src_word_sim.topk(min(k, src_word_sim.shape[0]))
+            for idx, sim in zip(indices, sims):
+                if sim <= 0.0:
+                    continue
+                trg_sent_idx = idx.item() // shape[1]
+                trg_word_idx = idx.item() % shape[1]
+
+                res.append((
+                    src_sent_idx,
+                    src_word_idx,
+                    trg_sent_idx,
+                    trg_word_idx,
+                    sim.item(),
+                ))
+
     return res
 
 
-def batch_batch_cosine_similarity(batch1, batch2):
-    """
-    Embeddings in a batch1: num_batch_sentences1 x num_batch_words1 x emb_dim
-    Embeddings in a batch2: num_batch_sentences2 x num_batch_words2 x emb_dim
+class FaissNN:
 
-    output: num_batch_sentences1 x num_batch_sentences2 x num_batch_words1
-            x num_batch_words2
-    """
-    batch1 = normalize_matrix(batch1)
-    batch2 = normalize_matrix(batch2)
+    def __init__(self, dim, build_string, use_gpu=True):
+        self.dim = dim
+        self.index = faiss.index_factory(dim, build_string)
+        self.gpu_resource = None
 
-    res = batch1.unsqueeze(0).transpose(0, 1).matmul(batch2.transpose(1, 2))
+        if use_gpu:
+            self.gpu_resource = faiss.StandardGpuResources()
+            self.gpu_resource.noTempMemory()
+            self.index = faiss.index_cpu_to_gpu(
+                self.gpu_resource,
+                0,
+                self.index
+            )
+
+    def train(self, data):
+        self.index.train(data)
+
+    def add(self, data):
+        self.index.add(data)
+
+    def search(self, query, k):
+        return self.index.search(query, k)
+
+
+def faiss_mining(src_batch, trg_batch, k, faiss_index_str, threshold_min=0.0,
+                 threshold_max=100.0):
+    """
+    Embeddings in a src_batch: num_batch_sentences1 x num_batch_words1 x emb_dim
+    Embeddings in a trg_batch: num_batch_sentences2 x num_batch_words2 x emb_dim
+
+    output: [(src_sent_idx, src_word_idx, trg_sent_idx, trg_word_idx, sim)]
+    """
+    src_batch_shape = src_batch.shape
+    trg_batch_shape = trg_batch.shape
+
+    batch1 = normalize_matrix(src_batch)
+    batch2 = normalize_matrix(trg_batch)
+
+    batch1 = src_batch.flatten(end_dim=1)
+    batch2 = trg_batch.flatten(end_dim=1)
+
+    tmp_k = k
+    if threshold_max < 100.0:
+        tmp_k = k * 100
+
+    faiss_index = FaissNN(batch2.shape[1], faiss_index_str, 'cuda' in batch1.device.type)
+    faiss_index.train(batch2)
+    faiss_index.add(batch2)
+
+    # (num_batch_sentences1 * num_batch_words1) x (num_batch_sentences2
+    # x num_batch_words2)
+    similarities, ids = faiss_index.search(batch1, tmp_k)
     # Zero vectors (PAD) give nan values, set them to 0.0
-    res = res.nan_to_num()
+    similarities = similarities.nan_to_num()
+    similarities[similarities < threshold_min] = 0.0
+    similarities[similarities > threshold_max] = 0.0
+    similarities = similarities.detach().to('cpu')
+
+    res = list()
+    for src_idx in range(similarities.shape[0]):
+        src_sent_idx = src_idx // src_batch_shape[1]
+        src_word_idx = src_idx % src_batch_shape[1]
+        num = 0
+
+        for trg_idx, sim in zip(ids[src_idx], similarities[src_idx]):
+            if num >= k:
+                break
+            if sim <= 0.0:
+                continue
+            trg_sent_idx = trg_idx.item() // trg_batch_shape[1]
+            trg_word_idx = trg_idx.item() % trg_batch_shape[1]
+            num += 1
+
+            res.append((
+                src_sent_idx,
+                src_word_idx,
+                trg_sent_idx,
+                trg_word_idx,
+                sim.item(),
+            ))
+
     return res
 
 

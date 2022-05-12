@@ -43,7 +43,8 @@ from cao_align.utils import (
     MultiDataLoader,
     cat_tensors_with_padding,
     detokenize,
-    batch_batch_cosine_similarity,
+    cosine_mining,
+    faiss_mining,
     MiningDataLoader,
     DataCollatorForCaoAlignment,
 )
@@ -186,7 +187,7 @@ class BertForCaoAlign(BertPreTrainedModel):
 
     def mine_word_pairs(self, src_data, trg_data, threshold, data_collator,
                         k=1, batch_size=16, threshold_max=100,
-                        progress_bar=True):
+                        progress_bar=True, faiss_index_str=None):
         """
         output: [(src_sentence_idx, src_word_idx, trg_sentence_idx, trg_word_idx)]
         """
@@ -230,35 +231,33 @@ class BertForCaoAlign(BertPreTrainedModel):
                         is_target_language=True,
                 )
 
-                similarities = batch_batch_cosine_similarity(
-                    src_batch_features,
-                    trg_batch_features,
-                )
-                similarities[similarities < threshold] = 0.0
-                similarities[similarities > threshold_max] = 0.0
-                similarities = similarities.detach().to('cpu')
+                if faiss_index_str is None:
+                    mined_pairs = cosine_mining(
+                        src_batch_features,
+                        trg_batch_features,
+                        k,
+                        threshold,
+                        threshold_max,
+                    )
+                else:
+                    mined_pairs = faiss_mining(
+                        src_batch_features,
+                        trg_batch_features,
+                        k,
+                        faiss_index_str,
+                        threshold,
+                        threshold_max,
+                    )
 
-                similarities = similarities.transpose(1, 2)
-                # XXX maybe eliminate loops by torch.flatten(start_dim=)
-                for src_sent_idx, src_sent_sim in enumerate(similarities):
-                    for src_word_idx, src_word_sim in enumerate(src_sent_sim):
-                        # [num_trg_sents, num_trg_words]
-                        shape = src_word_sim.shape
-                        src_word_sim = src_word_sim.flatten()
-                        sims, indices = src_word_sim.topk(min(k, src_word_sim.shape[0]))
-                        for idx, sim in zip(indices, sims):
-                            if sim <= 0.0:
-                                continue
-                            trg_sent_idx = idx.item() // shape[1]
-                            trg_word_idx = idx.item() % shape[1]
+                for src_sent_idx, src_word_idx, trg_sent_idx, trg_word_idx, sim in mined_pairs:
+                    batch_res_lst.append((
+                        src_sent_idx + src_batch_offset,
+                        src_word_idx,
+                        trg_sent_idx + trg_batch_offset,
+                        trg_word_idx,
+                        sim,
+                    ))
 
-                            batch_res_lst.append((
-                                src_sent_idx + src_batch_offset,
-                                src_word_idx,
-                                trg_sent_idx + trg_batch_offset,
-                                trg_word_idx,
-                                sim.item(),
-                            ))
                 trg_batch_offset += trg_data_loader.batch_size
             src_batch_offset += src_data_loader.batch_size
 
@@ -282,12 +281,13 @@ class BertForCaoAlign(BertPreTrainedModel):
 
     def mine_intersection_word_pairs(self, src_data, trg_data, threshold,
                                      data_collator, k=1, batch_size=16,
-                                     threshold_max=100):
+                                     threshold_max=100, faiss_index_str=None):
         with tqdm(desc='Intersection mining', total=3) as pbar:
             res = list()
             forward = self.mine_word_pairs(src_data, trg_data, threshold,
                                            data_collator, k, batch_size,
-                                           threshold_max=threshold_max)
+                                           threshold_max=threshold_max,
+                                           faiss_index_str=faiss_index_str)
             pbar.update(1)
 
             forward_dict = dict()
@@ -314,6 +314,7 @@ class BertForCaoAlign(BertPreTrainedModel):
                     batch_size,
                     progress_bar=False,
                     threshold_max=threshold_max,
+                    faiss_index_str=faiss_index_str,
                 )
 
                 for item in backward:
@@ -1450,12 +1451,14 @@ class UnsupervisedTrainer(CaoTrainer):
                 self.args.mining_k,
                 self.args.mining_batch_size,
                 dataloader_num_workers=self.data_processing_workers,
-                sample_for_mining=self.args.mining_sample_per_step,
+                src_sample_for_mining=self.args.src_mining_sample_per_step,
+                trg_sample_for_mining=self.args.trg_mining_sample_per_step,
                 threshold_max=self.args.mining_threshold_max,
                 log_dir=self.args.logging_dir if self.args.detailed_logging else None,
                 mining_method=self.args.mining_method,
                 max_seq_length=self.max_seq_length,
                 use_data_cache=self.use_data_cache,
+                faiss_index_str=self.args.faiss_index_str,
             )
             for src, trg in self.language_pairs
         ]

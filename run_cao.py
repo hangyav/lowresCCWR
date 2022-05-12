@@ -318,7 +318,14 @@ class MyTrainingArguments(TrainingArguments):
         default=1,
         metadata={"help": "Number of words (above threshold) to mine for each source word"}
     )
-    mining_sample_per_step: Optional[int] = field(
+    src_mining_sample_per_step: Optional[int] = field(
+        default=1000,
+        metadata={
+            "help": "Mining can take long on large corpora. Sample data for"
+            "each mining step."
+        },
+    )
+    trg_mining_sample_per_step: Optional[int] = field(
         default=1000,
         metadata={
             "help": "Mining can take long on large corpora. Sample data for"
@@ -330,6 +337,10 @@ class MyTrainingArguments(TrainingArguments):
         metadata={
             "help": "Options: forward, intersection"
         },
+    )
+    faiss_index_str: Optional[str] = field(
+        default='auto',
+        metadata={"help": "If use FAISS (not None) then what index type. Can be 'auto'. See: https://github.com/facebookresearch/faiss/wiki/Faiss-indexes"}
     )
     early_stopping_patience: int = field(
         default=-1,
@@ -357,8 +368,23 @@ class MyTrainingArguments(TrainingArguments):
         if self.mining_batch_size is None:
             self.mining_batch_size = self.per_device_train_batch_size
 
-        if self.mining_sample_per_step == -1:
-            self.mining_sample_per_step = None
+        if self.src_mining_sample_per_step == -1:
+            self.src_mining_sample_per_step = None
+
+        if self.trg_mining_sample_per_step == -1:
+            self.trg_mining_sample_per_step = None
+
+        if self.faiss_index_str.lower() == 'none':
+            self.faiss_index_str = None
+
+        if self.faiss_index_str is not None and self.faiss_index_str == 'auto':
+            if self.trg_mining_sample_per_step is not None:
+                if self.trg_mining_sample_per_step < 10000:
+                    self.faiss_index_str = None
+                else:
+                    self.faiss_index_str = 'IVF100,PQ8'
+                    self.mining_batch_size = max(self.mining_batch_size, 1000)
+
 
         if self.early_stopping_patience >= 0:
             self.load_best_model_at_end = True
