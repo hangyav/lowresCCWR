@@ -819,7 +819,8 @@ def test_mining(src, trg, threshold, k, expected,
     )
 
     output = align_bert.mine_word_pairs(src_dataset, trg_dataset, threshold,
-                                        collator, k=k, batch_size=1)
+                                        collator, k=k, src_batch_size=1,
+                                        trg_batch_size=1)
     output_idxs = [item[:4] for item in output]
 
     assert output_idxs == expected
@@ -891,7 +892,8 @@ def test_mining_faiss(src, trg, threshold, k, expected,
     )
 
     output = align_bert.mine_word_pairs(src_dataset, trg_dataset, threshold,
-                                        collator, k=k, batch_size=500,
+                                        collator, k=k, src_batch_size=500,
+                                        trg_batch_size=500,
                                         faiss_index_str='Flat')
     output_idxs = [item[:4] for item in output]
 
@@ -999,7 +1001,8 @@ def test_intersection_mining(src, trg, threshold, k, expected,
     )
 
     output = align_bert.mine_intersection_word_pairs(
-        src_dataset, trg_dataset, threshold, collator, k=k, batch_size=1)
+        src_dataset, trg_dataset, threshold, collator, k=k, src_batch_size=1,
+        trg_batch_size=1)
     output_idxs = [item[:4] for item in output]
 
     assert output_idxs == expected
@@ -1166,6 +1169,7 @@ def test_unsupervised_trainer(src_train, trg_train, eval,
         args=rc.MyTrainingArguments(
             detailed_logging=True,
             output_dir='/tmp',
+            logging_dir='/tmp',
             logging_steps=1,
             save_steps=1000,
             num_train_epochs=1,
@@ -1174,7 +1178,8 @@ def test_unsupervised_trainer(src_train, trg_train, eval,
             eval_steps=2,
             mining_threshold=0.5,
             mining_k=1,
-            mining_batch_size=1,
+            mining_src_batch_size=1,
+            mining_trg_batch_size=1,
             max_steps=10,
         ),
         train_dataset=train_dataset,
@@ -1318,6 +1323,7 @@ def test_freezed_linear(train,
     )
     trainer.train()
 
+    linear_bert = linear_bert.to(clone_model.device)
     for param, clone_param in zip(
             linear_bert.bert.named_parameters(),
             clone_model.bert.named_parameters()

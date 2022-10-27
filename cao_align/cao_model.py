@@ -186,17 +186,21 @@ class BertForCaoAlign(BertPreTrainedModel):
         )
 
     def mine_word_pairs(self, src_data, trg_data, threshold, data_collator,
-                        k=1, batch_size=16, threshold_max=100,
-                        progress_bar=True, faiss_index_str=None):
+                        k=1, src_batch_size=16, trg_batch_size=None,
+                        threshold_max=100, progress_bar=True,
+                        faiss_index_str=None):
         """
         output: [(src_sentence_idx, src_word_idx, trg_sentence_idx, trg_word_idx)]
         """
+        if trg_batch_size is None:
+            trg_batch_size = src_batch_size
+
         res = list()
         batch_res_lst = list()
         src_batch_offset = 0
         src_data_loader = DataLoader(
             src_data,
-            batch_size=batch_size,
+            batch_size=src_batch_size,
             collate_fn=data_collator,
             pin_memory=self.bert.device == 'cuda:0',
         )
@@ -214,7 +218,7 @@ class BertForCaoAlign(BertPreTrainedModel):
             )
             trg_data_loader = DataLoader(
                 trg_data,
-                batch_size=batch_size,
+                batch_size=trg_batch_size,
                 collate_fn=data_collator,
                 pin_memory=self.bert.device == 'cuda:0',
             )
@@ -280,12 +284,14 @@ class BertForCaoAlign(BertPreTrainedModel):
         return list(sorted(res, key=lambda x: (x[0], x[2], x[1], x[3])))
 
     def mine_intersection_word_pairs(self, src_data, trg_data, threshold,
-                                     data_collator, k=1, batch_size=16,
-                                     threshold_max=100, faiss_index_str=None):
+                                     data_collator, k=1, src_batch_size=16,
+                                     trg_batch_size=None, threshold_max=100,
+                                     faiss_index_str=None):
         with tqdm(desc='Intersection mining', total=3) as pbar:
             res = list()
             forward = self.mine_word_pairs(src_data, trg_data, threshold,
-                                           data_collator, k, batch_size,
+                                           data_collator, k, src_batch_size,
+                                           trg_batch_size,
                                            threshold_max=threshold_max,
                                            faiss_index_str=faiss_index_str)
             pbar.update(1)
@@ -311,7 +317,8 @@ class BertForCaoAlign(BertPreTrainedModel):
                     threshold,
                     data_collator,
                     k,
-                    batch_size,
+                    src_batch_size,
+                    trg_batch_size,
                     progress_bar=False,
                     threshold_max=threshold_max,
                     faiss_index_str=faiss_index_str,
@@ -1449,7 +1456,8 @@ class UnsupervisedTrainer(CaoTrainer):
                 self.args.mining_threshold,
                 self.data_collator,
                 self.args.mining_k,
-                self.args.mining_batch_size,
+                mine_src_batch_size=self.args.mining_src_batch_size,
+                mine_trg_batch_size=self.args.mining_trg_batch_size,
                 dataloader_num_workers=self.data_processing_workers,
                 src_sample_for_mining=self.args.src_mining_sample_per_step,
                 trg_sample_for_mining=self.args.trg_mining_sample_per_step,

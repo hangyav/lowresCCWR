@@ -298,7 +298,13 @@ class MyTrainingArguments(TrainingArguments):
         default=True,
         metadata={"help": "In case of models with additional layers on top of bert"},
     )
-    mining_batch_size: Optional[int] = field(
+    mining_src_batch_size: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Batch size for mining. None to use per_device_train_batch_size"
+        },
+    )
+    mining_trg_batch_size: Optional[int] = field(
         default=None,
         metadata={
             "help": "Batch size for mining. None to use per_device_train_batch_size"
@@ -365,8 +371,10 @@ class MyTrainingArguments(TrainingArguments):
 
     def __post_init__(self):
         super().__post_init__()
-        if self.mining_batch_size is None:
-            self.mining_batch_size = self.per_device_train_batch_size
+        if self.mining_src_batch_size is None:
+            self.mining_src_batch_size = self.per_device_train_batch_size
+        if self.mining_trg_batch_size is None:
+            self.mining_trg_batch_size = self.per_device_train_batch_size
 
         if self.src_mining_sample_per_step == -1:
             self.src_mining_sample_per_step = None
@@ -383,8 +391,9 @@ class MyTrainingArguments(TrainingArguments):
                     self.faiss_index_str = None
                 else:
                     self.faiss_index_str = 'IVF100,PQ8'
-                    self.mining_batch_size = max(self.mining_batch_size, 1000)
-
+                    self.mining_trg_batch_size = max(self.mining_trg_batch_size, 500)
+        elif self.faiss_index_str is not None:
+            self.mining_trg_batch_size = max(self.mining_trg_batch_size, 500)
 
         if self.early_stopping_patience >= 0:
             self.load_best_model_at_end = True

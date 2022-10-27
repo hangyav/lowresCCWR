@@ -240,7 +240,7 @@ class DataCollatorForCaoMLMAlignment(DataCollatorForCaoAlignment):
             special_token_masks = (special_token_masks >
                                    0).type(torch.IntTensor)
 
-            masked_inputs, labels = self.mlm_collator.mask_tokens(
+            masked_inputs, labels = self.mlm_collator.torch_mask_tokens(
                 input_ids.clone(), special_token_masks)
 
             output[f'{prefix}_mlm_input_ids'] = masked_inputs
@@ -337,12 +337,13 @@ class MiningDataLoader():
 
     def __init__(self, src_dataset, trg_dataset, tokenized_src_dataset,
                  tokenized_trg_dataset, batch_size, model, tokenizer,
-                 threshold, parallel_collator, k=1, mine_batch_size=None,
-                 dataloader_num_workers=0, dataloader_pin_memory=True,
-                 src_sample_for_mining=None, trg_sample_for_mining=None,
-                 threshold_max=100, log_dir=None, mining_method='intersection',
-                 num_dataset_iterations=1, max_seq_length=None,
-                 use_data_cache=True, faiss_index_str=None):
+                 threshold, parallel_collator, k=1, mine_src_batch_size=None,
+                 mine_trg_batch_size=None, dataloader_num_workers=0,
+                 dataloader_pin_memory=True, src_sample_for_mining=None,
+                 trg_sample_for_mining=None, threshold_max=100, log_dir=None,
+                 mining_method='intersection', num_dataset_iterations=1,
+                 max_seq_length=None, use_data_cache=True,
+                 faiss_index_str=None):
         self.dataset = (src_dataset, trg_dataset)
         self.tokenized_src_dataset = tokenized_src_dataset
         self.tokenized_trg_dataset = tokenized_trg_dataset
@@ -352,7 +353,8 @@ class MiningDataLoader():
         self.threshold = threshold
         self.parallel_collator = parallel_collator
         self.k = k
-        self.mine_batch_size = mine_batch_size if mine_batch_size else batch_size
+        self.mine_src_batch_size = mine_src_batch_size if mine_src_batch_size else batch_size
+        self.mine_trg_batch_size = mine_trg_batch_size if mine_trg_batch_size else batch_size
         self.dataloader_pin_memory = dataloader_pin_memory
         self.dataloader_num_workers = dataloader_num_workers
         self.src_sample_for_mining = src_sample_for_mining
@@ -447,7 +449,8 @@ class MiningDataLoader():
                 self.threshold,
                 self._unlabeled_collator,
                 k=self.k,
-                batch_size=self.mine_batch_size,
+                src_batch_size=self.mine_src_batch_size,
+                trg_batch_size=self.mine_trg_batch_size,
                 threshold_max=self.threshold_max,
                 faiss_index_str=self.faiss_index_str,
             )
@@ -668,6 +671,7 @@ class FaissNN:
         if use_gpu:
             self.gpu_resource = faiss.StandardGpuResources()
             self.gpu_resource.noTempMemory()
+            #  self.gpu_resource.setTempMemory(1024*1024*256)  # MB
             self.index = faiss.index_cpu_to_gpu(
                 self.gpu_resource,
                 0,
@@ -682,6 +686,10 @@ class FaissNN:
 
     def search(self, query, k):
         return self.index.search(query, k)
+
+    #  def __del__(self):
+    #      if self.gpu_resource is not None:
+    #          self.gpu_resource.noTempMemory()
 
 
 def faiss_mining(src_batch, trg_batch, k, faiss_index_str, threshold_min=0.0,
