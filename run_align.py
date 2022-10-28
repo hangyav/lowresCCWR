@@ -47,8 +47,8 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-from cao_align.cao_data import MAX_SENTENCE_LENGTH, LANGUAGE_SENTENCES_NUMBERS
-from cao_align.utils import (
+from align.parallel_data import MAX_SENTENCE_LENGTH, LANGUAGE_SENTENCES_NUMBERS
+from align.utils import (
     DataCollatorForCaoAlignment,
     SizedMultiDataset,
     MultiDataset,
@@ -58,13 +58,13 @@ from cao_align.utils import (
     load_parallel_data_from_file,
     load_text_data_from_file,
 )
-from cao_align.cao_model import (
+from align.model import (
     BertForCaoAlign,
     BertForCaoAlignMLM,
     BertForLinerLayearAlign,
     BertForPretrainedLinearLayerAlign,
 )
-from cao_align.cao_model import CaoTrainer, UnsupervisedTrainer
+from align.model import CaoTrainer, UnsupervisedTrainer
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.9.0")
@@ -148,7 +148,7 @@ class DataTrainingArguments:
         metadata={"help": "Options: supervised, mining"}
     )
     dataset_name: Optional[str] = field(
-        default='./cao_align/cao_data.py',
+        default='./align/parallel_data.py',
         metadata={"help": "The name of the dataset to use (via the datasets library)."}
     )
     dataset_dir: Optional[str] = field(
@@ -169,7 +169,7 @@ class DataTrainingArguments:
     )
     force_dataset_download: bool = field(default=False, metadata={"help": "Download parallel data."})
     mining_dataset_name: Optional[str] = field(
-        default='./cao_align/text_data.py',
+        default='./align/text_data.py',
         metadata={"help": "The name of the dataset to use (via the datasets library)."}
     )
     mining_dataset_dir: Optional[str] = field(

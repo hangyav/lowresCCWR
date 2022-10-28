@@ -37,8 +37,8 @@ from transformers.trainer_pt_utils import (
         DistributedSamplerWithLoop,
 )
 
-from cao_align.multilingual_alignment import hubness_CSLS, bestk_idx_CSLS
-from cao_align.utils import (
+from align.multilingual_alignment import hubness_CSLS, bestk_idx_CSLS
+from align.utils import (
     SizedMultiDataLoader,
     MultiDataLoader,
     cat_tensors_with_padding,

@@ -5,9 +5,9 @@ from functools import partial
 import copy
 import tempfile
 
-import run_cao as rc
-from cao_align import cao_model as cm
-from cao_align import utils as cu
+import run_align as rc
+from align import model as cm
+from align import utils as cu
 from transformers import AutoTokenizer, BertModel, AutoConfig
 from datasets import Dataset, DatasetDict
 

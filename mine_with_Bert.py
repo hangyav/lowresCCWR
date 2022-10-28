@@ -34,12 +34,12 @@ from transformers import (
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-from cao_align.cao_data import MAX_SENTENCE_LENGTH
-from cao_align.utils import (
+from align.parallel_data import MAX_SENTENCE_LENGTH
+from align.utils import (
     DataCollatorForUnlabeledData,
     tokenize_function_for_unlabeled,
 )
-from cao_align.cao_model import BertForCaoAlign
+from align.model import BertForCaoAlign
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.9.0")

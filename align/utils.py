@@ -23,8 +23,8 @@ from datasets import Dataset, DatasetDict
 from datasets.fingerprint import Hasher
 
 from mining_extractor import get_color, reset_color
-from cao_align.multilingual_alignment import keep_1to1
-from cao_align import text_data, cao_data
+from align.multilingual_alignment import keep_1to1
+from align import text_data, parallel_data
 
 logger = logging.getLogger(__name__)
 
@@ -952,7 +952,7 @@ def load_cached_dataset(*args):
 
 def load_parallel_data_from_file(sentences_file, alignments_file, src_lang,
                                  trg_lang, split, load_from_cache_file=True):
-    # TODO redundant with cao_data.py
+    # TODO redundant with parallel_data.py
     if load_from_cache_file:
         res = load_cached_dataset(
             sentences_file,
@@ -977,7 +977,7 @@ def load_parallel_data_from_file(sentences_file, alignments_file, src_lang,
                 assert sents is not None and aligns is not None
 
                 sents = sents.split(' ||| ')
-                if len(sents[0].split()) > cao_data.MAX_SENTENCE_LENGTH or len(sents[1].split()) > cao_data.MAX_SENTENCE_LENGTH:
+                if len(sents[0].split()) > parallel_data.MAX_SENTENCE_LENGTH or len(sents[1].split()) > parallel_data.MAX_SENTENCE_LENGTH:
                     continue
 
                 src_lst.append(sents[0].strip())

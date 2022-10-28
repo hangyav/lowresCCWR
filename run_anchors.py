@@ -47,13 +47,13 @@ from transformers import (
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-from cao_align.cao_data import MAX_SENTENCE_LENGTH
-from cao_align.utils import (
+from align.parallel_data import MAX_SENTENCE_LENGTH
+from align.utils import (
     DataCollatorForUnlabeledData,
     tokenize_function_for_unlabeled,
     save_embeddings,
 )
-from cao_align.cao_model import (
+from align.model import (
     BertForCaoAlign,
     BertForLinerLayearAlign,
 )
