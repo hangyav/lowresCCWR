@@ -23,7 +23,7 @@ from datasets import Dataset, DatasetDict
 from datasets.fingerprint import Hasher
 
 from mining_extractor import get_color, reset_color
-from align.multilingual_alignment import keep_1to1
+from align.alignment_utils import keep_1to1
 from align import text_data, parallel_data
 
 logger = logging.getLogger(__name__)

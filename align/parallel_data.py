@@ -2,7 +2,7 @@ import collections
 import os
 import numpy as np
 import datasets
-from align.multilingual_alignment import keep_1to1
+from align.alignment_utils import keep_1to1
 
 
 _DESCRIPTION = """\

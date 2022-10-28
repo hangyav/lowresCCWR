@@ -37,7 +37,7 @@ from transformers.trainer_pt_utils import (
         DistributedSamplerWithLoop,
 )
 
-from align.multilingual_alignment import hubness_CSLS, bestk_idx_CSLS
+from align.alignment_utils import hubness_CSLS, bestk_idx_CSLS
 from align.utils import (
     SizedMultiDataLoader,
     MultiDataLoader,
