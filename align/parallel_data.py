@@ -2,6 +2,7 @@ import collections
 import os
 import numpy as np
 import datasets
+from itertools import zip_longest
 from align.alignment_utils import keep_1to1
 
 
@@ -22,13 +23,6 @@ TranslateData = collections.namedtuple("TranslateData", ["url", "language_to_fil
 
 
 LANGUAGE_PATHS = {
-    #  'es-en': ('europarl-v7.es-en.token.clean', 'europarl-v7.es-en.intersect'),
-    #  'bg-en': ('europarl-v7.bg-en.token.clean', 'europarl-v7.bg-en.intersect'),
-    #  'fr-en': ('europarl-v7.fr-en.token.clean', 'europarl-v7.fr-en.intersect'),
-    #  'de-en': ('europarl-v7.de-en.token.clean', 'europarl-v7.de-en.intersect'),
-    #  'el-en': ('europarl-v7.el-en.token.clean', 'europarl-v7.el-en.intersect'),
-    # # 'ne-en': ('europarl-v7.ne-en.token.clean', 'europarl-v7.ne-en.intersect'),
-    #  'ne-en': ('final.data.clean.2.txt', 'final.data.clean.2.intersect'),
     'es-en': ('es-en.tokens', 'es-en.alignments'),
     'bg-en': ('bg-en.tokens', 'bg-en.alignments'),
     'fr-en': ('fr-en.tokens', 'fr-en.alignments'),
@@ -44,7 +38,7 @@ LANGUAGE_PATHS = {
 }
 
 # Order of data is TEST, DEV, TRAIN
-# -1 mean all
+# -1 mean all of the rest
 LANGUAGE_SENTENCES_NUMBERS = {
     'es-en': (1024, 1024, -1),
     'bg-en': (1024, 1024, -1),
@@ -139,11 +133,9 @@ class ParallelData(datasets.GeneratorBasedBuilder):
                 "alignment": datasets.Sequence(
                     datasets.Sequence(datasets.Value('int32'))
                 ),
-                #  "alignment": datasets.Array2D(shape=(-1, 2), dtype=int),
                 "source_language": datasets.Value("string"),
                 "target_language": datasets.Value("string"),
                 }),
-            #  supervised_keys=("source", "target", "alignment"),
             homepage="",
             citation=_CITATION,
         )
@@ -189,32 +181,42 @@ class ParallelData(datasets.GeneratorBasedBuilder):
         ]
 
     def _generate_examples(self, filepaths, start_idx, num_lines, language_pair):
-        with open(filepaths[0]) as f_sents, open(filepaths[1]) as f_align:
-            idx = 0
-            num = 0
-            for i, (sents, align) in enumerate(zip(f_sents, f_align)):
-                sents = sents.strip()
-                align = align.strip()
-                if start_idx <= i:
-                    if num == num_lines:
-                        break
-                    num += 1
+        for idx, item in enumerate(generate_samples(
+            filepaths,
+            start_idx,
+            num_lines,
+            language_pair
+        )):
+            yield idx, item
 
-                    sent1, sent2 = sents.split(' ||| ')
-                    if len(sent1.split()) > MAX_SENTENCE_LENGTH or len(sent2.split()) > MAX_SENTENCE_LENGTH:
-                        continue
 
-                    align_lst = np.array([
-                        list(map(int, pair.split('-')))
-                        for pair in align.split()
-                    ])
-                    align_lst = keep_1to1(align_lst)
+def generate_samples(filepaths, start_idx, num_lines, language_pair):
+    with open(filepaths[0]) as f_sents, open(filepaths[1]) as f_align:
+        num = 0
+        for i, (sents, align) in enumerate(zip_longest(f_sents, f_align)):
+            assert sents is not None and align is not None
 
-                    yield idx, {
-                        "source": sent1,
-                        "target": sent2,
-                        "alignment": align_lst,
-                        "source_language": language_pair[0],
-                        "target_language": language_pair[1],
-                    }
-                    idx += 1
+            sents = sents.strip()
+            align = align.strip()
+            if start_idx <= i:
+                if num == num_lines:
+                    break
+                num += 1
+
+                sent1, sent2 = sents.split(' ||| ')
+                if len(sent1.split()) > MAX_SENTENCE_LENGTH or len(sent2.split()) > MAX_SENTENCE_LENGTH:
+                    continue
+
+                align_lst = np.array([
+                    list(map(int, pair.split('-')))
+                    for pair in align.split()
+                ])
+                align_lst = keep_1to1(align_lst)
+
+                yield {
+                    "source": sent1,
+                    "target": sent2,
+                    "alignment": align_lst,
+                    "source_language": language_pair[0],
+                    "target_language": language_pair[1],
+                }

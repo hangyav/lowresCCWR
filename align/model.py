@@ -657,18 +657,6 @@ class BertForPretrainedLinearLayerAlign(BertForLinerLayearAlign):
 
     def _create_language_layer(self, language):
         if language in self.language_mappings:
-            #  layer = LinearEye(
-            #      self.config.hidden_size,
-            #      bias=False,
-            #      add_random=False,
-            #  )
-            #  with torch.no_grad():
-            #      layer.weight.copy_(
-            #          torch.tensor(
-            #              self.language_mappings[language],
-            #              dtype=torch.float32,
-            #          )
-            #      )
             layer = PretrainedMapping(
                 torch.tensor(
                     self.language_mappings[language],
@@ -997,21 +985,6 @@ class SupervisedTrainer(Trainer):
                 num_workers=self.args.dataloader_num_workers,
                 pin_memory=self.args.dataloader_pin_memory,
             )
-
-        #  sampler = self._get_single_sampler(
-        #      dataset,
-        #      batch_size,
-        #      per_device_batch_size
-        #  )
-        #  return DataLoader(
-        #      dataset,
-        #      batch_size=batch_size,
-        #      sampler=sampler,
-        #      collate_fn=self.data_collator,
-        #      drop_last=self.args.dataloader_drop_last,
-        #      num_workers=self.args.dataloader_num_workers,
-        #      pin_memory=self.args.dataloader_pin_memory,
-        #  )
 
         return DataLoader(
             dataset,

@@ -3,7 +3,6 @@ import logging
 from collections.abc import Sized
 from typing import Dict
 import numpy as np
-from itertools import zip_longest
 import inspect
 
 import faiss
@@ -23,7 +22,6 @@ from datasets import Dataset, DatasetDict
 from datasets.fingerprint import Hasher
 
 from mining_extractor import get_color, reset_color
-from align.alignment_utils import keep_1to1
 from align import text_data, parallel_data
 
 logger = logging.getLogger(__name__)
@@ -599,22 +597,6 @@ def normalize_matrix(mat, dim=-1):
     return mat / norm
 
 
-#  def sentence_batch_cosine_similarity(sentence, batch):
-#      """
-#      Embeddings of a sentence: num_sent_words x emb_dim
-#      Embeddings in a batch: num_batch_sentences x num_batch_words x emb_dim
-#
-#      output: num_batch_sentences x num_sent_words x num_batch_words
-#      """
-#      sentence = normalize_matrix(sentence)
-#      batch = normalize_matrix(batch)
-#
-#      res = sentence.matmul(batch.transpose(1, 2))
-#      # Zero vectors (PAD) give nan values, set them to 0.0
-#      res = res.nan_to_num()
-#      return res
-
-
 def cosine_mining(src_batch, trg_batch, k, threshold_min=0.0,
                   threshold_max=100.0):
     """
@@ -671,7 +653,6 @@ class FaissNN:
         if use_gpu:
             self.gpu_resource = faiss.StandardGpuResources()
             self.gpu_resource.noTempMemory()
-            #  self.gpu_resource.setTempMemory(1024*1024*256)  # MB
             self.index = faiss.index_cpu_to_gpu(
                 self.gpu_resource,
                 0,
@@ -686,10 +667,6 @@ class FaissNN:
 
     def search(self, query, k):
         return self.index.search(query, k)
-
-    #  def __del__(self):
-    #      if self.gpu_resource is not None:
-    #          self.gpu_resource.noTempMemory()
 
 
 def faiss_mining(src_batch, trg_batch, k, faiss_index_str, threshold_min=0.0,
@@ -811,11 +788,6 @@ def tokenize_function_per_input(tokenizer, max_seq_length, examples):
 def tokenize_function_for_parallel(tokenizer, max_seq_length, examples):
     src = tokenize_function_per_input(tokenizer, max_seq_length, examples['source'])
     trg = tokenize_function_per_input(tokenizer, max_seq_length, examples['target'])
-    #  assert examples['target_language'][0] == 'en', ('Not implemented: In case'
-    #                                                  + ' of En as target'
-    #                                                  + ' language this needs to'
-    #                                                  + ' be handled in the'
-    #                                                  + ' models!!!')
     alignments = filter_alignment(
         src['word_ids_lst'],
         trg['word_ids_lst'],
@@ -828,7 +800,6 @@ def tokenize_function_for_parallel(tokenizer, max_seq_length, examples):
         'trg_input_ids': trg['input_ids'],
         'trg_word_ids_lst': trg['word_ids_lst'],
         'trg_special_word_masks': trg['special_word_masks'],
-        #  'alignment': examples['alignment'],
         'alignment': alignments,
         'src_language': examples['source_language'],
         'trg_language': examples['target_language'],
@@ -913,16 +884,6 @@ def save_embeddings(embeddings, output, word_order=None):
             )
 
 
-def parse_alignments(align_str):
-    align_lst = np.array([
-        list(map(int, pair.split('-')))
-        for pair in align_str.split()
-    ])
-    align_lst = keep_1to1(align_lst)
-
-    return align_lst
-
-
 def cache_dataset(dataset, *args):
     fingerprint = Hasher.hash(args)
     path = os.path.join(
@@ -952,7 +913,8 @@ def load_cached_dataset(*args):
 
 def load_parallel_data_from_file(sentences_file, alignments_file, src_lang,
                                  trg_lang, split, load_from_cache_file=True):
-    # TODO redundant with parallel_data.py
+    assert all([num >= 0 for name, num in split[:-1]]), 'Only the last element can be -1'
+
     if load_from_cache_file:
         res = load_cached_dataset(
             sentences_file,
@@ -967,46 +929,24 @@ def load_parallel_data_from_file(sentences_file, alignments_file, src_lang,
 
     logger.info(f'Loading files: {sentences_file} -- {alignments_file}')
     res = dict()
-    with open(sentences_file) as sin, open(alignments_file) as ain:
-        num = 0
-        src_lst = list()
-        trg_lst = list()
-        align_lst = list()
-        for split_name, split_num in split:
-            for sents, aligns in zip_longest(sin, ain):
-                assert sents is not None and aligns is not None
+    start_idx = 0
+    for split_name, split_num in split:
+        items = list(parallel_data.generate_samples(
+            (sentences_file, alignments_file),
+            start_idx,
+            split_num,
+            (src_lang, trg_lang),
+        ))
 
-                sents = sents.split(' ||| ')
-                if len(sents[0].split()) > parallel_data.MAX_SENTENCE_LENGTH or len(sents[1].split()) > parallel_data.MAX_SENTENCE_LENGTH:
-                    continue
+        res[split_name] = Dataset.from_dict({
+            'source': [item['source'] for item in items],
+            'target': [item['target'] for item in items],
+            'alignment': [item['alignment'] for item in items],
+            'source_language': [item['source_language'] for item in items],
+            'target_language': [item['target_language'] for item in items],
+        })
 
-                src_lst.append(sents[0].strip())
-                trg_lst.append(sents[1].strip())
-                align_lst.append(parse_alignments(aligns))
-
-                num += 1
-                if num == split_num:
-                    res[split_name] = Dataset.from_dict({
-                        'source': src_lst,
-                        'target': trg_lst,
-                        'alignment': align_lst,
-                        'source_language': [src_lang] * len(src_lst),
-                        'target_language': [trg_lang] * len(trg_lst),
-                    })
-                    num = 0
-                    src_lst = list()
-                    trg_lst = list()
-                    align_lst = list()
-                    break
-
-            if len(src_lst) > 0:
-                res[split_name] = Dataset.from_dict({
-                    'source': src_lst,
-                    'target': trg_lst,
-                    'alignment': align_lst,
-                    'source_language': [src_lang] * len(src_lst),
-                    'target_language': [trg_lang] * len(trg_lst),
-                })
+        start_idx += split_num
 
     res = DatasetDict(res)
 
@@ -1025,7 +965,6 @@ def load_parallel_data_from_file(sentences_file, alignments_file, src_lang,
 
 
 def load_text_data_from_file(file, lang, load_from_cache_file=True):
-    # TODO redundant with text_data.py
     if load_from_cache_file:
         res = load_cached_dataset(
             file,
@@ -1036,22 +975,13 @@ def load_text_data_from_file(file, lang, load_from_cache_file=True):
             return res
 
     logger.info(f'Loading file: {file}')
-    res = dict()
-    with open(file) as fin:
-        lst = list()
-        for sent in fin:
-            sent = sent.strip()
-
-            length = len(sent.split())
-            if length > text_data.MAX_SENTENCE_LENGTH or length < text_data.MIN_SENTENCE_LENGTH:
-                continue
-
-            lst.append(sent)
-
-    res['train'] = Dataset.from_dict({
-        'text': lst,
-        'language': [lang] * len(lst),
-    })
+    lst = list(text_data.generate_samples(file))
+    res = {
+        'train': Dataset.from_dict({
+            'text': lst,
+            'language': [lang] * len(lst),
+        })
+    }
     res = DatasetDict(res)
 
     if load_from_cache_file:

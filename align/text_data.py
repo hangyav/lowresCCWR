@@ -3,19 +3,13 @@ import datasets
 
 
 _DESCRIPTION = """\
-Dataset containing plain sentences. We have this only for ease of use.
+Dataset containing plain sentences.
 """
 
 _CITATION = """\
 """
 
 _DATA_URL = "https://www.cis.uni-muenchen.de/~hangyav/data/ccwe_text_data.zip"
-
-# Tuple that describes a single pair of files with matching translations.
-# language_to_file is the map from language (2 letter string: example 'en')
-# to the file path in the extracted directory.
-# TODO
-#  TranslateData = collections.namedtuple("TranslateData", ["url", "language_to_file"])
 
 
 LANGUAGE_PATHS = {
@@ -94,17 +88,20 @@ class Text(datasets.GeneratorBasedBuilder):
         ]
 
     def _generate_examples(self, filepath, language):
-        with open(filepath) as fin:
-            idx = 0
-            for sent in fin:
-                sent = sent.strip()
+        for idx, sent in enumerate(generate_samples(filepath)):
+            yield idx, {
+                "text": sent,
+                "language": language
+            }
 
-                length = len(sent.split())
-                if length > MAX_SENTENCE_LENGTH or length < MIN_SENTENCE_LENGTH:
-                    continue
 
-                yield idx, {
-                    "text": sent,
-                    "language": language
-                }
-                idx += 1
+def generate_samples(path):
+    with open(path) as fin:
+        for sent in fin:
+            sent = sent.strip()
+
+            length = len(sent.split())
+            if length > MAX_SENTENCE_LENGTH or length < MIN_SENTENCE_LENGTH:
+                continue
+
+            yield sent
