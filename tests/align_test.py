@@ -28,7 +28,7 @@ def bert_base():
 
 @pytest.fixture
 def align_bert():
-    return cm.BertForCaoAlign.from_pretrained('bert-base-multilingual-cased')
+    return cm.BertForFullAlign.from_pretrained('bert-base-multilingual-cased')
 
 
 @pytest.fixture
@@ -41,19 +41,19 @@ def linear_bert():
 
 @pytest.fixture
 def align_mlm_bert():
-    model = cm.BertForCaoAlignMLM(
+    model = cm.BertForFullAlignMLM(
         AutoConfig.from_pretrained('bert-base-multilingual-cased'),
         bert=None,
         src_mlm_weight=0.01,
         trg_mlm_weight=0.01,
     )
-    model.bert = cm.BertForCaoAlign.from_pretrained('bert-base-multilingual-cased')
+    model.bert = cm.BertForFullAlign.from_pretrained('bert-base-multilingual-cased')
     return model
 
 
 @pytest.fixture
 def linear_mlm_bert():
-    model = cm.BertForCaoAlignMLM(
+    model = cm.BertForFullAlignMLM(
         AutoConfig.from_pretrained('bert-base-multilingual-cased'),
         bert=None,
         src_mlm_weight=0.01,
@@ -204,7 +204,7 @@ def test_SubwordToTokenStrategyLast(features, word_ids_lsts,
 def test_word_alignment(alignment, src_special_word_masks,
                         trg_special_word_masks, src_word_ids_lst,
                         trg_word_ids_lst, expected):
-    output = cu.DataCollatorForCaoAlignment.get_aligned_indices(
+    output = cu.DataCollatorForAlignment.get_aligned_indices(
         alignment,
         True,
         src_special_word_masks,
@@ -308,7 +308,7 @@ def test_word_alignment(alignment, src_special_word_masks,
 ])
 def test_pipeline(examples, expected, equals,
                   bert_base, align_bert, tokenizer_bert_multilingual_cased):
-    collator = cu.DataCollatorForCaoAlignment(
+    collator = cu.DataCollatorForAlignment(
         tokenizer=tokenizer_bert_multilingual_cased,
         max_length=align_bert.bert.embeddings.position_embeddings.num_embeddings,
         include_clssep=True,
@@ -389,7 +389,7 @@ def test_pipeline(examples, expected, equals,
 ])
 def test_trainer(train, eval,
                  bert_base, align_bert, tokenizer_bert_multilingual_cased):
-    collator = cu.DataCollatorForCaoAlignment(
+    collator = cu.DataCollatorForAlignment(
         tokenizer=tokenizer_bert_multilingual_cased,
         max_length=align_bert.bert.embeddings.position_embeddings.num_embeddings,
         include_clssep=True,
@@ -414,7 +414,7 @@ def test_trainer(train, eval,
         desc="Running tokenizer on every text in dataset",
     )
     eval_dataset = cu.SizedMultiDataset({'test': eval_dataset})
-    trainer = cm.CaoTrainer(
+    trainer = cm.SupervisedTrainer(
         model=align_bert,
         args=rc.MyTrainingArguments(
             detailed_logging=True,
@@ -485,7 +485,7 @@ def test_trainer(train, eval,
 def test_trainer_mlm(train, eval,
                      bert_base, align_mlm_bert,
                      tokenizer_bert_multilingual_cased):
-    collator = cu.DataCollatorForCaoMLMAlignment(
+    collator = cu.DataCollatorForMLMAlignment(
         tokenizer=tokenizer_bert_multilingual_cased,
         max_length=align_mlm_bert.bert.bert.embeddings.position_embeddings.num_embeddings,
         include_clssep=True,
@@ -512,7 +512,7 @@ def test_trainer_mlm(train, eval,
         desc="Running tokenizer on every text in dataset",
     )
     eval_dataset = cu.SizedMultiDataset({'test': eval_dataset})
-    trainer = cm.CaoTrainer(
+    trainer = cm.SupervisedTrainer(
         model=align_mlm_bert,
         args=rc.MyTrainingArguments(
             detailed_logging=True,
@@ -634,7 +634,7 @@ mlm_pipeline_data = [
 
 def _mlm_pipeline(examples, expected, equals,
                   bert_base, model, tokenizer_bert_multilingual_cased):
-    collator = cu.DataCollatorForCaoMLMAlignment(
+    collator = cu.DataCollatorForMLMAlignment(
         tokenizer=tokenizer_bert_multilingual_cased,
         max_length=model.bert.bert.embeddings.position_embeddings.num_embeddings,
         include_clssep=True,
@@ -1043,7 +1043,7 @@ def test_intersection_mining(src, trg, threshold, k, expected,
 ])
 def test_mining_data_loader(src, trg, threshold, k,
                             align_bert, tokenizer_bert_multilingual_cased):
-    collator = cu.DataCollatorForCaoAlignment(
+    collator = cu.DataCollatorForAlignment(
         tokenizer=tokenizer_bert_multilingual_cased,
         max_length=align_bert.bert.embeddings.position_embeddings.num_embeddings,
         include_clssep=True,
@@ -1131,7 +1131,7 @@ def test_mining_data_loader(src, trg, threshold, k,
 def test_unsupervised_trainer(src_train, trg_train, eval,
                               bert_base, align_bert,
                               tokenizer_bert_multilingual_cased):
-    collator = cu.DataCollatorForCaoAlignment(
+    collator = cu.DataCollatorForAlignment(
         tokenizer=tokenizer_bert_multilingual_cased,
         max_length=align_bert.bert.embeddings.position_embeddings.num_embeddings,
         include_clssep=True,
@@ -1290,7 +1290,7 @@ def test_freezed_linear(train,
                         bert_base, linear_bert,
                         tokenizer_bert_multilingual_cased):
     clone_model = copy.deepcopy(linear_bert)
-    collator = cu.DataCollatorForCaoAlignment(
+    collator = cu.DataCollatorForAlignment(
         tokenizer=tokenizer_bert_multilingual_cased,
         max_length=linear_bert.bert.embeddings.position_embeddings.num_embeddings,
         include_clssep=True,
@@ -1305,7 +1305,7 @@ def test_freezed_linear(train,
         desc="Running tokenizer on every text in dataset",
     )
     train_dataset = cu.SizedMultiDataset({'test': train_dataset})
-    trainer = cm.CaoTrainer(
+    trainer = cm.SupervisedTrainer(
         model=linear_bert,
         args=rc.MyTrainingArguments(
             detailed_logging=True,

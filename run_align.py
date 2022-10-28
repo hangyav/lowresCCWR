@@ -49,22 +49,22 @@ from transformers.utils.versions import require_version
 
 from align.parallel_data import MAX_SENTENCE_LENGTH, LANGUAGE_SENTENCES_NUMBERS
 from align.utils import (
-    DataCollatorForCaoAlignment,
+    DataCollatorForAlignment,
     SizedMultiDataset,
     MultiDataset,
-    DataCollatorForCaoMLMAlignment,
+    DataCollatorForMLMAlignment,
     tokenize_function_for_parallel,
     tokenize_function_for_unlabeled,
     load_parallel_data_from_file,
     load_text_data_from_file,
 )
 from align.model import (
-    BertForCaoAlign,
-    BertForCaoAlignMLM,
+    BertForFullAlign,
+    BertForFullAlignMLM,
     BertForLinerLayearAlign,
     BertForPretrainedLinearLayerAlign,
 )
-from align.model import CaoTrainer, UnsupervisedTrainer
+from align.model import SupervisedTrainer, UnsupervisedTrainer
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.9.0")
@@ -504,11 +504,11 @@ def get_model_components(model_args, data_args, training_args):
     if model_args.model_name_or_path:
         arch = config.architectures[0]
 
-        if arch == BertForCaoAlignMLM.__name__:
+        if arch == BertForFullAlignMLM.__name__:
             sub_arch = config.subarchitecture
 
-            if sub_arch == BertForCaoAlign.__name__:
-                aligned_model = BertForCaoAlign(config)
+            if sub_arch == BertForFullAlign.__name__:
+                aligned_model = BertForFullAlign(config)
             else:
                 langs = {
                         lang
@@ -533,7 +533,7 @@ def get_model_components(model_args, data_args, training_args):
                 else:
                     raise f'Architecture not supported: {sub_arch}'
 
-            model = BertForCaoAlignMLM.from_pretrained(
+            model = BertForFullAlignMLM.from_pretrained(
                 model_args.model_name_or_path,
                 from_tf=bool(".ckpt" in model_args.model_name_or_path),
                 config=config,
@@ -548,7 +548,7 @@ def get_model_components(model_args, data_args, training_args):
             if not data_args.do_mlm:
                 model = model.bert
 
-            model_base = BertForCaoAlignMLM.from_pretrained(
+            model_base = BertForFullAlignMLM.from_pretrained(
                 model_args.model_name_or_path,
                 from_tf=bool(".ckpt" in model_args.model_name_or_path),
                 config=config,
@@ -557,12 +557,12 @@ def get_model_components(model_args, data_args, training_args):
                 use_auth_token=True if model_args.use_auth_token else None,
                 src_mlm_weight=data_args.src_mlm_weight,
                 trg_mlm_weight=data_args.trg_mlm_weight,
-                bert=BertForCaoAlign(config),
+                bert=BertForFullAlign(config),
             )
             model_base = model_base.bert.bert
         else:
             if training_args.align_method == 'full':
-                model = BertForCaoAlign.from_pretrained(
+                model = BertForFullAlign.from_pretrained(
                     model_args.model_name_or_path,
                     from_tf=bool(".ckpt" in model_args.model_name_or_path),
                     config=config,
@@ -610,7 +610,7 @@ def get_model_components(model_args, data_args, training_args):
                 raise f'Align method not supported: {training_args.align_method}'
 
             if data_args.do_mlm:
-                mlm_model = BertForCaoAlignMLM(
+                mlm_model = BertForFullAlignMLM(
                     config,
                     src_mlm_weight=data_args.src_mlm_weight,
                     trg_mlm_weight=data_args.trg_mlm_weight,
@@ -633,7 +633,7 @@ def get_model_components(model_args, data_args, training_args):
 
         #  if not data_args.do_mlm:
         #      if training_args.align_method == 'full':
-        #          model = BertForCaoAlign.from_pretrained(
+        #          model = BertForFullAlign.from_pretrained(
         #              model_args.model_name_or_path,
         #              from_tf=bool(".ckpt" in model_args.model_name_or_path),
         #              config=config,
@@ -683,7 +683,7 @@ def get_model_components(model_args, data_args, training_args):
         #      if training_args.align_method == 'linear':
         #          raise NotImplementedError('MLM with linear mapping is not implemented yet!')
         #
-        #      model = BertForCaoAlignMLM.from_pretrained(
+        #      model = BertForFullAlignMLM.from_pretrained(
         #          model_args.model_name_or_path,
         #          from_tf=bool(".ckpt" in model_args.model_name_or_path),
         #          config=config,
@@ -708,7 +708,7 @@ def get_model_components(model_args, data_args, training_args):
         raise NotImplementedError('Training from scratch not supported!')
         #  if not data_args.do_mlm:
         #      if training_args.align_method == 'full':
-        #          model = BertForCaoAlign.from_config(config)
+        #          model = BertForFullAlign.from_config(config)
         #      elif training_args.align_method == 'linear':
         #          langs = {
         #                  lang
@@ -726,7 +726,7 @@ def get_model_components(model_args, data_args, training_args):
         #      else:
         #          raise f'Align method not supported: {training_args.align_method}'
         #  else:
-        #      model = BertForCaoAlignMLM.from_config(
+        #      model = BertForFullAlignMLM.from_config(
         #          config,
         #          src_mlm_weight=data_args.src_mlm_weight,
         #          trg_mlm_weight=data_args.trg_mlm_weight,
@@ -742,7 +742,7 @@ def get_model_components(model_args, data_args, training_args):
 
 
 def get_parallel_datasets(data_args, model_args, training_args, tokenizer, model):
-    if type(model) == BertForCaoAlignMLM:
+    if type(model) == BertForFullAlignMLM:
         model = model.bert
     # Downloading and loading a dataset
     config_names = data_args.dataset_config_name
@@ -873,13 +873,13 @@ def get_parallel_datasets(data_args, model_args, training_args, tokenizer, model
     # Data collator
     # This one will take care converting lists to tensors
     if not data_args.do_mlm:
-        data_collator = DataCollatorForCaoAlignment(
+        data_collator = DataCollatorForAlignment(
             tokenizer=tokenizer,
             max_length=model.bert.embeddings.position_embeddings.num_embeddings,
             include_clssep=model_args.include_clssep,
         )
     else:
-        data_collator = DataCollatorForCaoMLMAlignment(
+        data_collator = DataCollatorForMLMAlignment(
             tokenizer=tokenizer,
             max_length=model.bert.embeddings.position_embeddings.num_embeddings,
             include_clssep=model_args.include_clssep,
@@ -981,7 +981,7 @@ def get_trainer(model_args, data_args, training_args, tokenizer, model,
         ))
 
     if data_args.data_mode == 'supervised':
-        trainer = CaoTrainer(
+        trainer = SupervisedTrainer(
             model=model,
             args=training_args,
             train_dataset=train_dataset if training_args.do_train else None,

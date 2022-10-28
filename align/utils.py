@@ -91,7 +91,7 @@ class DataCollatorForUnlabeledData:
         return self
 
 
-class DataCollatorForCaoAlignment(DataCollatorForUnlabeledData):
+class DataCollatorForAlignment(DataCollatorForUnlabeledData):
 
     def __init__(self, tokenizer, max_length, include_clssep):
         super().__init__(tokenizer, max_length, include_clssep)
@@ -133,7 +133,7 @@ class DataCollatorForCaoAlignment(DataCollatorForUnlabeledData):
         src_lang_lst = self._to_list(examples, 'src_language')
         trg_lang_lst = self._to_list(examples, 'trg_language')
 
-        src_idxs, trg_idxs = DataCollatorForCaoAlignment.get_aligned_indices(
+        src_idxs, trg_idxs = DataCollatorForAlignment.get_aligned_indices(
                 alignment,
                 self.include_clssep,
                 src_special_word_masks,
@@ -188,11 +188,11 @@ class DataCollatorForCaoAlignment(DataCollatorForUnlabeledData):
                 src_res.append([i, 0])
                 trg_res.append([i, 0])
                 # [SEP]
-                src_idx = DataCollatorForCaoAlignment.get_word_idx_of_subword(
+                src_idx = DataCollatorForAlignment.get_word_idx_of_subword(
                     (src_special_word_masks[i] == 1).nonzero()[1],
                     src_word_ids_lst[i]
                 )
-                trg_idx = DataCollatorForCaoAlignment.get_word_idx_of_subword(
+                trg_idx = DataCollatorForAlignment.get_word_idx_of_subword(
                     (trg_special_word_masks[i] == 1).nonzero()[1],
                     trg_word_ids_lst[i]
                 )
@@ -213,7 +213,7 @@ class DataCollatorForCaoAlignment(DataCollatorForUnlabeledData):
         return -1
 
 
-class DataCollatorForCaoMLMAlignment(DataCollatorForCaoAlignment):
+class DataCollatorForMLMAlignment(DataCollatorForAlignment):
 
     eval_mode: bool
 
@@ -249,7 +249,7 @@ class DataCollatorForCaoMLMAlignment(DataCollatorForCaoAlignment):
         return output
 
     def get_eval(self):
-        return DataCollatorForCaoMLMAlignment(
+        return DataCollatorForMLMAlignment(
             self.tokenizer,
             self.max_length,
             self.include_clssep,
@@ -369,7 +369,7 @@ class MiningDataLoader():
         self.use_data_cache = use_data_cache
         self.faiss_index_str = faiss_index_str
 
-        if type(model).__name__ == 'BertForCaoAlignMLM':
+        if type(model).__name__ == 'BertForFullAlignMLM':
             # TODO not nice, refactor
             max_len = model.bert.bert.embeddings.position_embeddings.num_embeddings
         else:

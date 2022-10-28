@@ -39,7 +39,7 @@ from align.utils import (
     DataCollatorForUnlabeledData,
     tokenize_function_for_unlabeled,
 )
-from align.model import BertForCaoAlign
+from align.model import BertForFullAlign
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.9.0")
@@ -167,7 +167,7 @@ def main():
     # Load pretrained model and tokenizer
     config = AutoConfig.from_pretrained(model_args.model_name_or_path)
     tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
-    model = BertForCaoAlign.from_pretrained(
+    model = BertForFullAlign.from_pretrained(
         model_args.model_name_or_path,
         from_tf=bool(".ckpt" in model_args.model_name_or_path),
         config=config,

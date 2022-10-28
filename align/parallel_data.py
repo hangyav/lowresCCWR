@@ -63,7 +63,7 @@ LANGUAGE_SENTENCES_NUMBERS = {
 MAX_SENTENCE_LENGTH = 128
 
 
-class CaoConfig(datasets.BuilderConfig):
+class ParallelDataConfig(datasets.BuilderConfig):
 
     def __init__(self, language_pair=(None, None), **kwargs):
         """BuilderConfig for FLoRes.
@@ -77,7 +77,7 @@ class CaoConfig(datasets.BuilderConfig):
         name = "%s-%s" % (language_pair[0], language_pair[1])
 
         description = ("Dataset from %s to %s") % (language_pair[0], language_pair[1])
-        super(CaoConfig, self).__init__(
+        super(ParallelDataConfig, self).__init__(
             name=name,
             description=description,
             version=datasets.Version("1.0.1", ""),
@@ -89,42 +89,42 @@ class CaoConfig(datasets.BuilderConfig):
         self.language_pair = language_pair
 
 
-class Cao(datasets.GeneratorBasedBuilder):
+class ParallelData(datasets.GeneratorBasedBuilder):
     BUILDER_CONFIGS = [
-        CaoConfig(
+        ParallelDataConfig(
             language_pair=("es", "en"),
         ),
-        CaoConfig(
+        ParallelDataConfig(
             language_pair=("fr", "en"),
         ),
-        CaoConfig(
+        ParallelDataConfig(
             language_pair=("de", "en"),
         ),
-        CaoConfig(
+        ParallelDataConfig(
             language_pair=("bg", "en"),
         ),
-        CaoConfig(
+        ParallelDataConfig(
             language_pair=("el", "en"),
         ),
-        CaoConfig(
+        ParallelDataConfig(
             language_pair=("ne", "en"),
         ),
-        CaoConfig(
+        ParallelDataConfig(
             language_pair=("am", "en"),
         ),
-        CaoConfig(
+        ParallelDataConfig(
             language_pair=("mi", "en"),
         ),
-        CaoConfig(
+        ParallelDataConfig(
             language_pair=("ml", "en"),
         ),
-        CaoConfig(
+        ParallelDataConfig(
             language_pair=("sd", "en"),
         ),
-        CaoConfig(
+        ParallelDataConfig(
             language_pair=("si", "en"),
         ),
-        CaoConfig(
+        ParallelDataConfig(
             language_pair=("sw", "en"),
         ),
     ]

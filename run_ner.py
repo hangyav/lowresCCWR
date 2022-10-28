@@ -48,10 +48,10 @@ from transformers.utils.versions import require_version
 
 from align.model import (
     BertForTokenClassification,
-    BertForCaoAlign,
+    BertForFullAlign,
     BertForLinerLayearAlign,
     BertForPretrainedLinearLayerAlign,
-    BertForCaoAlignMLM,
+    BertForFullAlignMLM,
 )
 from align.utils import (
     tokenizer_function_for_ner,
@@ -439,8 +439,8 @@ def get_model_components(model_args, data_args, training_args, num_labels,
         # But it will do for now
         sub_arch = config.subarchitecture
 
-        if sub_arch == BertForCaoAlign.__name__:
-            aligned_model = BertForCaoAlign(config)
+        if sub_arch == BertForFullAlign.__name__:
+            aligned_model = BertForFullAlign(config)
         else:
             languages = set(config.language_layers) | set(data_args.dataset_config_name)
             if sub_arch == BertForLinerLayearAlign.__name__:
@@ -482,10 +482,10 @@ def get_model_components(model_args, data_args, training_args, num_labels,
                 languages=languages,
             )
             params['language_layers'] = list(languages)
-        elif arch == BertForCaoAlignMLM.__name__:
+        elif arch == BertForFullAlignMLM.__name__:
             sub_arch = config.subarchitecture
-            if sub_arch == BertForCaoAlign.__name__:
-                aligned_model = BertForCaoAlign(config)
+            if sub_arch == BertForFullAlign.__name__:
+                aligned_model = BertForFullAlign(config)
             else:
                 languages = set(model_args.languages) | set(data_args.dataset_config_name)
                 params['language_layers'] = list(languages)
@@ -503,7 +503,7 @@ def get_model_components(model_args, data_args, training_args, num_labels,
                 else:
                     raise f'Architecture not supported: {sub_arch}'
 
-                model = BertForCaoAlignMLM.from_pretrained(
+                model = BertForFullAlignMLM.from_pretrained(
                     model_args.model_name_or_path,
                     from_tf=bool(".ckpt" in model_args.model_name_or_path),
                     config=config,
@@ -533,8 +533,8 @@ def get_model_components(model_args, data_args, training_args, num_labels,
             )
             params['language_layers'] = list(languages)
         else:
-            # BertForCaoAlign or just Bert in general
-            aligned_model = BertForCaoAlign.from_pretrained(
+            # BertForFullAlign or just Bert in general
+            aligned_model = BertForFullAlign.from_pretrained(
                 model_args.model_name_or_path,
                 from_tf=bool(".ckpt" in model_args.model_name_or_path),
                 config=config,

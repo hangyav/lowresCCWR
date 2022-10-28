@@ -54,7 +54,7 @@ from align.utils import (
     save_embeddings,
 )
 from align.model import (
-    BertForCaoAlign,
+    BertForFullAlign,
     BertForLinerLayearAlign,
 )
 
@@ -267,7 +267,7 @@ def get_model_components(model_args, data_args):
         )
 
     if model_args.align_method == 'full':
-        model = BertForCaoAlign.from_pretrained(
+        model = BertForFullAlign.from_pretrained(
             model_args.model_name_or_path,
             from_tf=bool(".ckpt" in model_args.model_name_or_path),
             config=config,

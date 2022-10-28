@@ -46,13 +46,13 @@ from align.utils import (
     cosine_mining,
     faiss_mining,
     MiningDataLoader,
-    DataCollatorForCaoAlignment,
+    DataCollatorForAlignment,
 )
 
 logger = logging.getLogger(__name__)
 
 
-class BertForCaoAlign(BertPreTrainedModel):
+class BertForFullAlign(BertPreTrainedModel):
     # TODO Refactoring: Create heads for full, linear, pretrained align and MLM.
     # Then create model that contain an align head and/or MLM head, classification head
 
@@ -140,7 +140,7 @@ class BertForCaoAlign(BertPreTrainedModel):
 
         total_loss = alignment_loss + regularization_loss
 
-        return CaoAlignmentOutput(
+        return AlignmentOutput(
                 alignment_loss=alignment_loss,
                 regularization_loss=regularization_loss,
                 loss=total_loss,
@@ -342,7 +342,7 @@ class BertForCaoAlign(BertPreTrainedModel):
             return list(sorted(res, key=lambda x: (x[0], x[2], x[1], x[3])))
 
 
-class BertForCaoAlignMLM(BertPreTrainedModel):
+class BertForFullAlignMLM(BertPreTrainedModel):
 
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
     _keys_to_ignore_on_load_missing = [
@@ -426,7 +426,7 @@ class BertForCaoAlignMLM(BertPreTrainedModel):
             alignment_mlm_loss = alignment_mlm_loss \
                 + trg_mlm_output.loss * self.trg_mlm_weight
 
-        output = CaoAlignmentMLMOutput(
+        output = AlignmentMLMOutput(
             alignment_loss=alignment_output.alignment_loss,
             regularization_loss=alignment_output.regularization_loss,
             combined_alignment_loss=alignment_output.loss,
@@ -521,7 +521,7 @@ class LinearEye(nn.Module):
         return F.linear(input, self.weight, self.bias)
 
 
-class BertForLinerLayearAlign(BertForCaoAlign):
+class BertForLinerLayearAlign(BertForFullAlign):
 
     def __init__(self, config, languages, freeze_bert_core=True):
         super().__init__(config)
@@ -597,7 +597,7 @@ class BertForLinerLayearAlign(BertForCaoAlign):
             (1, 1), dtype=torch.float, device=self.bert.device)
         total_loss = alignment_loss
 
-        return CaoAlignmentOutput(
+        return AlignmentOutput(
                 alignment_loss=alignment_loss,
                 regularization_loss=regularization_loss,
                 loss=total_loss,
@@ -704,7 +704,7 @@ class BertForTokenClassification(BertPreTrainedModel):
                 parameters = self.bert.parameters()
             else:
                 arch = type(self.bert).__name__
-                if arch == BertForCaoAlign.__name__:
+                if arch == BertForFullAlign.__name__:
                     parameters = None
                 elif arch in [
                         BertForLinerLayearAlign.__name__,
@@ -791,7 +791,7 @@ class BertForTokenClassification(BertPreTrainedModel):
 
 
 @dataclass
-class CaoAlignmentOutput(ModelOutput):
+class AlignmentOutput(ModelOutput):
 
     alignment_loss: Optional[torch.FloatTensor] = None
     regularization_loss: Optional[torch.FloatTensor] = None
@@ -801,7 +801,7 @@ class CaoAlignmentOutput(ModelOutput):
 
 
 @dataclass
-class CaoAlignmentMLMOutput(CaoAlignmentOutput):
+class AlignmentMLMOutput(AlignmentOutput):
 
     combined_alignment_loss: Optional[torch.FloatTensor] = None
     src_mlm_output: MaskedLMOutput = None
@@ -874,7 +874,7 @@ class SubwordToTokenStrategyAvg(SubwordToTokenStrategyBase):
         raise NotImplementedError
 
 
-class CaoTrainer(Trainer):
+class SupervisedTrainer(Trainer):
 
     def __init__(
         self,
@@ -1107,9 +1107,9 @@ class CaoTrainer(Trainer):
                 'alignment_loss': outputs['alignment_loss'].item(),
                 'regularization_loss': outputs['regularization_loss'].item(),
             }
-            if type(model) == BertForCaoAlign or type(model) == BertForLinerLayearAlign:
+            if type(model) == BertForFullAlign or type(model) == BertForLinerLayearAlign:
                 metrics['combined_alignment_loss'] = outputs['loss'].item()
-            elif type(model) == BertForCaoAlignMLM:
+            elif type(model) == BertForFullAlignMLM:
                 metrics['combined_alignment_loss'] = outputs['combined_alignment_loss'].item()
                 metrics['src_mlm_loss'] = outputs['src_mlm_output']['loss'].item(
                 ) if 'src_mlm_output' in outputs else 0.0
@@ -1398,13 +1398,13 @@ class CaoTrainer(Trainer):
             )
 
 
-class UnsupervisedTrainer(CaoTrainer):
+class UnsupervisedTrainer(SupervisedTrainer):
 
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module] = None,
         args: TrainingArguments = None,
-        data_collator: DataCollatorForCaoAlignment = None,
+        data_collator: DataCollatorForAlignment = None,
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Dataset] = None,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
