@@ -39,7 +39,7 @@ from align.utils import (
     DataCollatorForUnlabeledData,
     tokenize_function_for_unlabeled,
 )
-from align.model import BertForFullAlign
+from align.model import BertForFullAlign, BertForLinerLayearAlign
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.9.0")
@@ -68,6 +68,12 @@ class ModelArguments:
     threshold_max: float = field(
         default=100,
         metadata={"help": "Maximum word pair similarity."},
+    )
+    align_method: Optional[str] = field(
+        default='full',
+        metadata={
+            "help": "Options: full, linear"
+        },
     )
     mine_method: str = field(
         default='intersection',
@@ -167,11 +173,23 @@ def main():
     # Load pretrained model and tokenizer
     config = AutoConfig.from_pretrained(model_args.model_name_or_path)
     tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
-    model = BertForFullAlign.from_pretrained(
-        model_args.model_name_or_path,
-        from_tf=bool(".ckpt" in model_args.model_name_or_path),
-        config=config,
-    )
+
+    if model_args.align_method == 'full':
+        model = BertForFullAlign.from_pretrained(
+            model_args.model_name_or_path,
+            from_tf=bool(".ckpt" in model_args.model_name_or_path),
+            config=config,
+        )
+    elif model_args.align_method == 'linear':
+        langs = {data_args.src_language, data_args.trg_language}
+        model = BertForLinerLayearAlign.from_pretrained(
+            model_args.model_name_or_path,
+            from_tf=bool(".ckpt" in model_args.model_name_or_path),
+            config=config,
+            languages=langs,
+        )
+    else:
+        raise ValueError(f'Model type not supported: {model_args.align_method}')
 
     model.resize_token_embeddings(len(tokenizer))
     model = model.to(model_args.device)
@@ -189,9 +207,9 @@ def main():
         [data_args.src_language] * len(src_dataset),
     )
     src_dataset = src_dataset.map(
-        partial(tokenize_function_for_unlabeled, tokenizer),
+        partial(tokenize_function_for_unlabeled, tokenizer, data_args.max_seq_length),
         batched=True,
-        num_proc=1,
+        num_proc=data_args.preprocessing_num_workers,
         #  remove_columns=src_dataset.column_names,
         load_from_cache_file=False,
         desc="Running tokenizer on the source dataset",
@@ -209,9 +227,9 @@ def main():
         [data_args.trg_language] * len(trg_dataset),
     )
     trg_dataset = trg_dataset.map(
-        partial(tokenize_function_for_unlabeled, tokenizer),
+        partial(tokenize_function_for_unlabeled, tokenizer, data_args.max_seq_length),
         batched=True,
-        num_proc=1,
+        num_proc=data_args.preprocessing_num_workers,
         #  remove_columns=src_dataset.column_names,
         load_from_cache_file=False,
         desc="Running tokenizer on the target dataset",
@@ -235,7 +253,8 @@ def main():
         model_args.threshold,
         data_collator,
         k=model_args.k,
-        batch_size=model_args.batch_size,
+        src_batch_size=model_args.batch_size,
+        trg_batch_size=model_args.batch_size,
         threshold_max=model_args.threshold_max,
     )
 

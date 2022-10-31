@@ -958,21 +958,6 @@ def get_mining_datasets(training_args, data_args, model_args, tokenizer, model,
 def get_trainer(model_args, data_args, training_args, tokenizer, model,
                 model_base, train_dataset, eval_dataset, mining_dataset,
                 tokenized_mining_dataset, data_collator, max_seq_length):
-    # Initialize our Trainer
-    #  optimizer = Adam([param for param in model.parameters() if
-    #                    param.requires_grad], lr=training_args.learning_rate,
-    #                   betas=(training_args.adam_beta1, training_args.adam_beta2), eps=1e-9)
-    #
-    #  def lr_lambda(current_step: int):
-    #      if current_step < training_args.warmup_steps:
-    #          return float(current_step) / float(max(1, training_args.warmup_steps))
-    #      return 1.0
-    #
-    #  scheduler = LambdaLR(
-    #      optimizer,
-    #      lr_lambda,
-    #  )
-    #  trainer = Trainer(
     callbacks = []
     if training_args.early_stopping_patience >= 0:
         callbacks.append(EarlyStoppingCallback(
@@ -991,7 +976,6 @@ def get_trainer(model_args, data_args, training_args, tokenizer, model,
             bert_base=model_base,
             include_clssep=model_args.include_clssep,
             callbacks=callbacks,
-            #  optimizers=(optimizer, scheduler),
         )
     elif data_args.data_mode == 'mining':
         trainer = UnsupervisedTrainer(
@@ -1005,10 +989,8 @@ def get_trainer(model_args, data_args, training_args, tokenizer, model,
             include_clssep=model_args.include_clssep,
             language_pairs=data_args.mining_language_pairs,
             callbacks=callbacks,
-            #  optimizers=(optimizer, scheduler),
             max_seq_length=max_seq_length,
             use_data_cache=not data_args.overwrite_cache,
-            #  data_processing_workers=data_args.preprocessing_num_workers,
             data_processing_workers=0,
             tokenized_train_dataset=tokenized_mining_dataset,
         )

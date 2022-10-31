@@ -27,10 +27,13 @@ if __name__ == '__main__':
         s2 = data[1].split()
 
         for i, (alignment, score) in enumerate(zip(data[2].split(), data[3].split())):
-            align = list(map(int, alignment.split('-')))
-            print(f'{get_color(i)}{align[0]}:{s1[align[0]]} - {align[1]}:{s2[align[1]]} - {score}{reset_color}')
-            s1[align[0]] = f'{get_color(i)}{s1[align[0]]}{reset_color}'
-            s2[align[1]] = f'{get_color(i)}{s2[align[1]]}{reset_color}'
+            try:
+                align = list(map(int, alignment.split('-')))
+                print(f'{get_color(i)}{align[0]}:{s1[align[0]]} - {align[1]}:{s2[align[1]]} - {score}{reset_color}')
+                s1[align[0]] = f'{get_color(i)}{s1[align[0]]}{reset_color}'
+                s2[align[1]] = f'{get_color(i)}{s2[align[1]]}{reset_color}'
+            except IndexError:
+                print(f'IndexError: {alignment}')
 
         print(' '.join(s1))
         print(' '.join(s2))
