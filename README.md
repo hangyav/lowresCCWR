@@ -62,15 +62,21 @@ The datasets are tokenized with the following tools:
 
 Related publications:
 
-[1] V. Hangya, H. Shaikh Saadi and A. Fraser, [Improving Low-Resource Languages in Pre-Trained Multilingual anguage Models](#) in Proceedings of the 2022 Conference on Empirical Methods in Natural Language Processing (EMNLP), 2022.
+[1] Viktor Hangya, Hossain Shaikh Saadi, and Alexander Fraser. 2022. [Improving Low-Resource Languages in Pre-Trained Multilingual Language Models](https://aclanthology.org/2022.emnlp-main.822). In Proceedings of the 2022 Conference on Empirical Methods in Natural Language Processing, pages 11993–12006
 
 
 ```
-@inproceedings{Hangya2022,
-author = {Hangya, Viktor and Shaikh Saadi, Hossain and Fraser, Alexander},
-title = {{Improving Low-Resource Languages in Pre-Trained Multilingual anguage Models}},
-booktitle = {Proceedings of the 2022 Conference on Empirical Methods in Natural Language Processing},
-year = {2022}
+@inproceedings{hangya-etal-2022-improving,
+    title = "Improving Low-Resource Languages in Pre-Trained Multilingual Language Models",
+    author = "Hangya, Viktor  and
+      Saadi, Hossain Shaikh  and
+      Fraser, Alexander",
+    booktitle = "Proceedings of the 2022 Conference on Empirical Methods in Natural Language Processing",
+    month = dec,
+    year = "2022",
+    address = "Abu Dhabi, United Arab Emirates",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2022.emnlp-main.822",
+    pages = "11993--12006",
 }
-
 ```
